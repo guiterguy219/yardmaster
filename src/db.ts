@@ -17,6 +17,7 @@ export function getDb(): Database.Database {
   _db.pragma("foreign_keys = ON");
 
   migrate(_db);
+  migrateContextStore(_db);
   return _db;
 }
 
@@ -163,6 +164,29 @@ export function getRunningTasks(): TaskRow[] {
   return getDb()
     .prepare("SELECT * FROM tasks WHERE status = 'running' ORDER BY created_at DESC")
     .all() as TaskRow[];
+}
+
+function migrateContextStore(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      key TEXT NOT NULL,
+      content TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      agent_roles TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(repo, kind, key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_repo_kind
+      ON context_entries(repo, kind);
+
+    CREATE INDEX IF NOT EXISTS idx_context_hash
+      ON context_entries(content_hash);
+  `);
 }
 
 export function logAgentRun(
