@@ -5,6 +5,7 @@ import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
 import { commitAndPush } from "./agents/git-agent.js";
+import { analyzeFailure } from "./failure-analysis.js";
 
 export interface TaskResult {
   taskId: string;
@@ -66,16 +67,18 @@ export async function executeTask(
         }
       }
 
-      updateTask(taskId, {
-        status: "failed",
-        error: `Review loop ended without convergence: ${loopResult.finalVerdict}`,
-      });
-      return {
-        taskId,
-        success: false,
-        prUrl: null,
-        error: `Review loop ended without convergence: ${loopResult.finalVerdict}`,
-      };
+      const failError = `Review loop ended without convergence: ${loopResult.finalVerdict}`;
+      updateTask(taskId, { status: "failed", error: failError });
+
+      // Analyze failure pattern for self-improvement
+      try {
+        const category = await analyzeFailure(taskId, description, failError, loopResult.reviewSummary);
+        console.log(`  Failure classified as: ${category}`);
+      } catch {
+        // Best effort
+      }
+
+      return { taskId, success: false, prUrl: null, error: failError };
     }
 
     // Run check command if configured
