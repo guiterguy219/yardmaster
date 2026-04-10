@@ -1,4 +1,5 @@
-import { loadConfig, getRepo } from "./config.js";
+import { execSync } from "node:child_process";
+import { loadConfig, getRepo, type RepoConfig } from "./config.js";
 import { createTask, updateTask } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
@@ -75,6 +76,20 @@ export async function executeTask(
         prUrl: null,
         error: `Review loop ended without convergence: ${loopResult.finalVerdict}`,
       };
+    }
+
+    // Run check command if configured
+    if (repo.checkCommand) {
+      console.log(`  Running check: ${repo.checkCommand}`);
+      try {
+        execSync(repo.checkCommand, { cwd: worktree.path, stdio: "pipe" });
+        console.log(`  Check passed`);
+      } catch (err) {
+        const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
+        console.log(`  Check FAILED`);
+        updateTask(taskId, { status: "failed", error: `Check failed: ${checkError.slice(0, 200)}` });
+        return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
+      }
     }
 
     // Commit, push, and create PR

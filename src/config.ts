@@ -8,6 +8,7 @@ export interface RepoConfig {
   githubOrg: string;
   githubRepo: string;
   defaultBranch: string;
+  checkCommand?: string;
 }
 
 export interface YardmasterConfig {
@@ -38,6 +39,7 @@ export function loadConfig(): YardmasterConfig {
       org: string;
       repo: string;
       branch?: string;
+      checkCommand?: string;
     }>;
   };
 
@@ -47,6 +49,7 @@ export function loadConfig(): YardmasterConfig {
     githubOrg: r.org,
     githubRepo: r.repo,
     defaultBranch: r.branch ?? "main",
+    checkCommand: r.checkCommand,
   }));
 
   return {

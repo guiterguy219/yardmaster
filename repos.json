@@ -54,7 +54,8 @@
       "path": "~/code/gibson-ops/yardmaster",
       "org": "guiterguy219",
       "repo": "yardmaster",
-      "branch": "main"
+      "branch": "main",
+      "checkCommand": "npx tsc --noEmit"
     }
   ]
 }
