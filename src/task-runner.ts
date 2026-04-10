@@ -9,6 +9,7 @@ import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
 import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
+import { ingestRepo } from "./ingestor.js";
 
 export interface TaskResult {
   taskId: string;
@@ -61,6 +62,11 @@ export async function executeTask(
     updatePipelineStage(taskId, "worktree_created");
     console.log(`  Worktree: ${worktree.path}`);
     console.log(`  Branch: ${worktree.branch}`);
+
+    // Ingest repo context (config files, dependencies)
+    console.log(`  Ingesting repo context...`);
+    const ingestResult = await ingestRepo(config, repoName, repo.localPath);
+    console.log(`  Ingested ${ingestResult.filesChanged}/${ingestResult.filesScanned} files, ${ingestResult.chunksUpserted} chunks, ${ingestResult.depsUpserted} deps`);
 
     // Run review loop (coder + reviewers)
     console.log(`  Running review loop...`);
