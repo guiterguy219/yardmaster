@@ -21,15 +21,19 @@ Agent orchestration system — autonomous coding, review, and PR creation via Cl
 
 Agents are one-shot `claude -p` child processes spawned by `src/agent-runner.ts`. Each task:
 1. Creates a git worktree for isolation
-2. Runs the coder agent (writes code)
-3. Runs style + logic reviewers (up to 4 rounds with diminishing severity)
-4. Alignment gate (haiku call) filters off-topic reviewer feedback after each review
-5. Commits, pushes, creates PR via `gh`
-6. Cleans up worktree
+2. Tools agent advises on libraries/patterns (once, before round 1)
+3. Runs the coder agent (writes code)
+4. Runs style + logic reviewers (up to 4 rounds with diminishing severity)
+5. Alignment gate (haiku call) filters off-topic reviewer feedback after each review
+6. Runs check command (e.g. `tsc --noEmit`) before PR creation
+7. Commits, pushes, creates PR via `gh` with review summary
+8. Cleans up worktree
 
 Key contracts:
-- **Coder agent**: edits files, does NOT stage or commit
+- **Coder agent**: edits files, does NOT stage or commit. Its response text is a summary — real work is in file edits.
 - **Reviewers**: read-only, return JSON `{ verdict, issues[] }`
+- **Alignment gate**: runs on reviewer output ONLY (not coder output). Coder summaries look misaligned but the file changes are what matter.
+- **Tools agent**: read-only, returns plain text recommendations
 - **Git agent**: stages, commits, pushes, creates PR
 - **Alignment gate**: fail-open (defaults to aligned=true on failure)
 

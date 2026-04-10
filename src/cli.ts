@@ -6,6 +6,7 @@ import { checkCapacity } from "./capacity.js";
 import { enqueueTask, getQueueContents, removeJob, changePriority, closeQueue } from "./queue/task-queue.js";
 import { startWorker, stopWorker } from "./queue/task-worker.js";
 import { PRIORITY, PRIORITY_LABELS, parsePriority, type PriorityLevel } from "./queue/constants.js";
+import { scanReposForIssues } from "./issue-scanner.js";
 
 const program = new Command();
 
@@ -129,6 +130,23 @@ program
     process.on("SIGTERM", shutdown);
 
     console.log("Worker running. Press Ctrl+C to stop.\n");
+  });
+
+// ── ym scan ─────────────────────────────────────────────
+program
+  .command("scan")
+  .description("Scan all repos for ym-labeled GitHub issues and queue them")
+  .action(async () => {
+    console.log("Scanning repos for issues...\n");
+    const result = await scanReposForIssues();
+    console.log(`\nScan complete: ${result.queued} queued, ${result.skipped} skipped`);
+    if (result.errors.length > 0) {
+      console.log(`Errors:`);
+      for (const err of result.errors) {
+        console.log(`  - ${err}`);
+      }
+    }
+    await closeQueue();
   });
 
 // ── ym status ───────────────────────────────────────────
