@@ -1,6 +1,7 @@
 import type { YardmasterConfig, RepoConfig } from "../config.js";
 import { runAgent } from "../agent-runner.js";
 import { PLANNER_SYSTEM_PROMPT, buildPlannerPrompt } from "../prompts/planner.js";
+import { parseAgentJson } from "../utils/parse-json.js";
 
 export interface SubTask {
   description: string;
@@ -31,21 +32,9 @@ export async function runPlanner(
 
   if (!result.success) return fallback;
 
-  let raw = result.result.trim();
-
-  // Strip markdown fences if present
-  const fenceMatch = raw.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
-  if (fenceMatch) {
-    raw = fenceMatch[1].trim();
+  const parsed = parseAgentJson<SubTask[]>(result.result);
+  if (Array.isArray(parsed) && parsed.length > 0) {
+    return parsed;
   }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed as SubTask[];
-    }
-    return fallback;
-  } catch {
-    return fallback;
-  }
+  return fallback;
 }

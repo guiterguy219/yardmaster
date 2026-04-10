@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import type { YardmasterConfig, RepoConfig } from "./config.js";
 import { logAgentRun } from "./db.js";
 import { logReviewRound, getReviewHistory } from "./diff-ledger.js";
+import { parseAgentJson } from "./utils/parse-json.js";
 import { detectOscillation } from "./oscillation.js";
 import { runCoder } from "./agents/coder.js";
 import { runStyleReviewer } from "./agents/style-reviewer.js";
@@ -33,21 +34,14 @@ interface ReviewOutput {
 }
 
 function parseReviewerOutput(result: string): ReviewOutput {
-  let text = result.trim();
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    text = fenceMatch[1].trim();
-  }
-
-  try {
-    const parsed = JSON.parse(text) as ReviewOutput;
-    return {
-      verdict: parsed.verdict === "approve" ? "approve" : "revise",
-      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-    };
-  } catch {
+  const parsed = parseAgentJson<ReviewOutput>(result);
+  if (!parsed) {
     return { verdict: "revise", issues: [] };
   }
+  return {
+    verdict: parsed.verdict === "approve" ? "approve" : "revise",
+    issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+  };
 }
 
 function filterIssuesBySeverity(issues: ReviewIssue[], round: number): ReviewIssue[] {
