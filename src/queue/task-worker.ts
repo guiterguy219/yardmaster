@@ -40,6 +40,8 @@ export function startWorker(): Worker {
     {
       connection: REDIS_CONNECTION,
       concurrency: 1,
+      stalledInterval: 30000,
+      maxStalledCount: 1,
     }
   );
 

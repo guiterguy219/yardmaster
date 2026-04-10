@@ -54,6 +54,15 @@ function migrate(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const cols = db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map(c => c.name));
+  if (!colNames.has("pipeline_stage")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN pipeline_stage TEXT");
+  }
+  if (!colNames.has("worker_pid")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN worker_pid INTEGER");
+  }
 }
 
 export function createTask(repo: string, description: string): string {
@@ -67,7 +76,7 @@ export function createTask(repo: string, description: string): string {
 
 export function updateTask(
   id: string,
-  fields: Partial<{ status: string; branch: string; pr_url: string; error: string }>
+  fields: Partial<{ status: TaskStatus; branch: string; pr_url: string; error: string }>
 ): void {
   const db = getDb();
   const sets: string[] = ["updated_at = datetime('now')"];
@@ -84,24 +93,72 @@ export function updateTask(
   db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...values);
 }
 
-export function getTask(id: string) {
-  return getDb().prepare("SELECT * FROM tasks WHERE id = ?").get(id) as {
-    id: string;
-    repo: string;
-    description: string;
-    status: string;
-    branch: string | null;
-    pr_url: string | null;
-    error: string | null;
-    created_at: string;
-    updated_at: string;
-  } | undefined;
+// 'completed' is the canonical success status; 'done' is retained for backward-compat
+// with pre-migration rows. Callers must treat both as equivalent success states.
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'partial' | 'done' | 'failed' | 'interrupted';
+
+export type TaskRow = {
+  id: string;
+  repo: string;
+  description: string;
+  status: TaskStatus;
+  branch: string | null;
+  pr_url: string | null;
+  error: string | null;
+  pipeline_stage: string | null;
+  worker_pid: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function getTask(id: string): TaskRow | undefined {
+  return getDb().prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
 }
 
-export function getRecentTasks(limit = 10) {
+export function getRecentTasks(limit = 10): TaskRow[] {
   return getDb()
     .prepare("SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?")
-    .all(limit) as Array<ReturnType<typeof getTask> & {}>;
+    .all(limit) as TaskRow[];
+}
+
+export function updatePipelineStage(id: string, stage: string, workerPid?: number): void {
+  const db = getDb();
+  const sets: string[] = ["updated_at = datetime('now')", "pipeline_stage = ?"];
+  const values: unknown[] = [stage];
+
+  if (workerPid !== undefined) {
+    sets.push("worker_pid = ?");
+    values.push(workerPid);
+  }
+
+  values.push(id);
+  db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/**
+ * Atomically transition a task from interrupted → running.
+ * Returns true if the claim succeeded (this worker owns the task),
+ * false if another worker already claimed it.
+ */
+export function claimInterruptedTask(id: string): boolean {
+  const result = getDb()
+    .prepare(
+      "UPDATE tasks SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'interrupted'"
+    )
+    .run(id);
+  return result.changes > 0;
+}
+
+export function getInterruptedTasks(): TaskRow[] {
+  return getDb()
+    .prepare("SELECT * FROM tasks WHERE status = 'interrupted' ORDER BY created_at DESC")
+    .all() as TaskRow[];
+}
+
+export function getRunningTasks(): TaskRow[] {
+  return getDb()
+    .prepare("SELECT * FROM tasks WHERE status = 'running' ORDER BY created_at DESC")
+    .all() as TaskRow[];
 }
 
 export function logAgentRun(
