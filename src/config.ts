@@ -10,6 +10,9 @@ export interface RepoConfig {
   defaultBranch: string;
   checkCommand?: string;
   testCommand?: string;
+  devCommand?: string;
+  devPort?: number;
+  readyPattern?: string;
 }
 
 export interface YardmasterConfig {
@@ -42,6 +45,9 @@ export function loadConfig(): YardmasterConfig {
       branch?: string;
       checkCommand?: string;
       testCommand?: string;
+      devCommand?: string;
+      devPort?: number;
+      readyPattern?: string;
     }>;
   };
 
@@ -53,6 +59,9 @@ export function loadConfig(): YardmasterConfig {
     defaultBranch: r.branch ?? "main",
     checkCommand: r.checkCommand,
     testCommand: r.testCommand,
+    devCommand: r.devCommand,
+    devPort: r.devPort,
+    readyPattern: r.readyPattern,
   }));
 
   return {
