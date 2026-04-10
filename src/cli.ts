@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { Command } from "commander";
 import { executeTask } from "./task-runner.js";
 import { getRecentTasks } from "./db.js";
@@ -13,14 +14,34 @@ program
 program
   .command("task")
   .description("Run an autonomous coding task")
-  .argument("<description>", "What the agent should do")
+  .argument("[description]", "What the agent should do")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
-  .action(async (description: string, opts: { repo: string }) => {
+  .option("--file <path>", "Read task description from a file")
+  .action(async (description: string | undefined, opts: { repo: string; file?: string }) => {
+    let taskDescription = "";
+
+    if (opts.file) {
+      let contents = "";
+      try {
+        contents = readFileSync(opts.file, "utf-8").trim();
+      } catch (err) {
+        program.error(`cannot read file '${opts.file}': ${(err as NodeJS.ErrnoException).message}`);
+      }
+      if (!contents.length) {
+        program.error(`file '${opts.file}' is empty`);
+      }
+      taskDescription = contents;
+    } else if (description) {
+      taskDescription = description;
+    } else {
+      program.error("provide a task description or use --file <path>");
+    }
+
     console.log(`\nYardmaster — Task`);
     console.log(`  Repo: ${opts.repo}`);
-    console.log(`  Task: ${description}\n`);
+    console.log(`  Task: ${taskDescription}\n`);
 
-    const result = await executeTask(opts.repo, description);
+    const result = await executeTask(opts.repo, taskDescription);
 
     console.log();
     if (result.success) {
