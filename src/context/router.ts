@@ -10,9 +10,10 @@ export type AgentRole =
   | "style-reviewer"
   | "logic-reviewer"
   | "planner"
-  | "tools-agent";
+  | "tools-agent"
+  | "test-quality";
 
-export const ALL_AGENT_ROLES: AgentRole[] = ["coder", "style-reviewer", "logic-reviewer", "planner", "tools-agent"];
+export const ALL_AGENT_ROLES: AgentRole[] = ["coder", "style-reviewer", "logic-reviewer", "planner", "tools-agent", "test-quality"];
 
 interface ContextRow {
   id: number;
@@ -44,6 +45,7 @@ const AGENT_BUDGETS: Record<AgentRole, number> = {
   "logic-reviewer": 3072,
   planner: 2048,
   "tools-agent": 1024,
+  "test-quality": 2048,
 };
 
 // Priority order for context kinds — higher-priority kinds are included first

@@ -5,6 +5,7 @@ import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
 import { runTestLoop } from "./test-loop.js";
+import { runTestQualityAgent } from "./agents/test-quality.js";
 import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
@@ -118,6 +119,24 @@ export async function executeTask(
         updateTask(taskId, { status: "failed", error: checkFailError });
         if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
         return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
+      }
+    }
+
+    // Run test quality agent if test command is configured
+    if (repo.testCommand) {
+      console.log(`  Staging files for test quality analysis...`);
+      execSync("git add -A", { cwd: worktree.path, stdio: "pipe" });
+      const diff = execSync("git diff --cached", { cwd: worktree.path, stdio: "pipe" }).toString();
+
+      if (diff.length > 0) {
+        console.log(`  Running test quality agent...`);
+        const tqResult = await runTestQualityAgent(config, repo, diff, worktree.path);
+        console.log(`  Test quality: ${tqResult.summary.slice(0, 100)}`);
+
+        if (tqResult.wrote) {
+          execSync("git add -A", { cwd: worktree.path, stdio: "pipe" });
+          updatePipelineStage(taskId, "tests_written");
+        }
       }
     }
 
