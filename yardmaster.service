@@ -1,0 +1,16 @@
+[Unit]
+Description=Yardmaster task worker
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+User=jared
+WorkingDirectory=/home/jared/code/gibson-ops/yardmaster
+ExecStart=/home/jared/.nvm/versions/node/v22.22.2/bin/node --import tsx/esm src/queue/worker-entry.ts
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=NO_COLOR=1
+
+[Install]
+WantedBy=multi-user.target
