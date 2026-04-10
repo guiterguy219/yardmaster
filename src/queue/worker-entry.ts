@@ -1,6 +1,27 @@
 import { startWorker, stopWorker } from "./task-worker.js";
+import { loadConfig } from "../config.js";
+import { detectAndMarkInterrupted, recoverInterruptedTasks } from "../recovery.js";
+import { removeOrphanedWorktrees } from "../worktree.js";
 
 console.log("Yardmaster worker starting...");
+
+const _config = loadConfig();
+
+console.log("  Scanning for dead workers...");
+const _marked = detectAndMarkInterrupted();
+console.log(`  ${_marked} task(s) newly marked interrupted`);
+
+console.log("  Recovering interrupted tasks...");
+const _recovery = await recoverInterruptedTasks(_config);
+console.log(`  Recovered: ${_recovery.recovered}  Failed: ${_recovery.failed}  Skipped: ${_recovery.skipped}`);
+
+console.log("  Cleaning up orphaned worktrees...");
+const _gc = removeOrphanedWorktrees(_config);
+console.log(`  Removed: ${_gc.removed} worktree(s)`);
+for (const err of _gc.errors) {
+  console.log(`  Warning: ${err}`);
+}
+
 const worker = startWorker();
 
 const shutdown = async () => {

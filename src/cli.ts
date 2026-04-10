@@ -11,6 +11,8 @@ import { PRIORITY, PRIORITY_LABELS, parsePriority, type PriorityLevel } from "./
 import { scanReposForIssues } from "./issue-scanner.js";
 import { runDoctor } from "./doctor.js";
 import { onboardRepo } from "./onboarding.js";
+import { detectAndMarkInterrupted, recoverInterruptedTasks } from "./recovery.js";
+import { removeOrphanedWorktrees } from "./worktree.js";
 
 const program = new Command();
 
@@ -36,6 +38,12 @@ program
 
     const config = loadConfig();
     const repo = getRepo(config, opts.repo);
+
+    detectAndMarkInterrupted();
+    const recovery = await recoverInterruptedTasks(config);
+    if (recovery.recovered > 0 || recovery.failed > 0) {
+      console.log(`  Recovery: ${recovery.recovered} recovered, ${recovery.failed} failed, ${recovery.skipped} skipped\n`);
+    }
 
     if (!repo.checkCommand) {
       const onboarding = await onboardRepo(repo.localPath, repo.name);
@@ -268,6 +276,38 @@ program
     console.log();
   });
 
+// ── ym recover ──────────────────────────────────────────
+program
+  .command("recover")
+  .description("Detect dead workers, recover interrupted tasks, and GC orphaned worktrees")
+  .option("--gc", "Also remove orphaned worktrees for completed/failed tasks")
+  .action(async (opts: { gc?: boolean }) => {
+    const config = loadConfig();
+
+    console.log("\nYardmaster — Recovery\n");
+
+    // Step 1: detect running tasks whose worker PIDs are dead
+    console.log("Scanning for dead workers...");
+    const marked = detectAndMarkInterrupted();
+    console.log(`  ${marked} task(s) newly marked interrupted\n`);
+
+    // Step 2: recover interrupted tasks
+    console.log("Recovering interrupted tasks...");
+    const { recovered, failed, skipped } = await recoverInterruptedTasks(config);
+    console.log(`  Recovered: ${recovered}  Failed: ${failed}  Skipped: ${skipped}\n`);
+
+    // Step 3: GC orphaned worktrees (opt-in)
+    if (opts.gc) {
+      console.log("Cleaning up orphaned worktrees...");
+      const { removed, errors } = removeOrphanedWorktrees(config);
+      console.log(`  Removed: ${removed} worktree(s)`);
+      for (const err of errors) {
+        console.log(`  Warning: ${err}`);
+      }
+      console.log();
+    }
+  });
+
 // ── ym capacity ─────────────────────────────────────────
 program
   .command("capacity")
@@ -310,12 +350,13 @@ function resolveDescription(description: string | undefined, filePath?: string):
 
 function formatStatus(status: string): string {
   switch (status) {
-    case "completed": return "[done]";
-    case "running":   return "[....]";
-    case "failed":    return "[FAIL]";
-    case "partial":   return "[part]";
-    case "pending":   return "[wait]";
-    default:          return `[${status}]`;
+    case "completed":    return "[done]";
+    case "running":      return "[....]";
+    case "failed":       return "[FAIL]";
+    case "partial":      return "[part]";
+    case "pending":      return "[wait]";
+    case "interrupted":  return "[intr]";
+    default:             return `[${status}]`;
   }
 }
 

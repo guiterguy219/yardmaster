@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { loadConfig, getRepo, type RepoConfig } from "./config.js";
-import { createTask, updateTask } from "./db.js";
+import { createTask, updateTask, updatePipelineStage } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
@@ -40,6 +40,7 @@ export async function executeTask(
   // Create task record
   const taskId = createTask(repoName, description);
   updateTask(taskId, { status: "running" });
+  updatePipelineStage(taskId, "created", process.pid);
   console.log(`  Task ${taskId} created`);
 
   let worktree: Worktree | null = null;
@@ -49,6 +50,7 @@ export async function executeTask(
     console.log(`  Creating worktree...`);
     worktree = createWorktree(config, repo, taskId);
     updateTask(taskId, { branch: worktree.branch });
+    updatePipelineStage(taskId, "worktree_created");
     console.log(`  Worktree: ${worktree.path}`);
     console.log(`  Branch: ${worktree.branch}`);
 
@@ -59,6 +61,10 @@ export async function executeTask(
     console.log(
       `  Review loop complete: ${loopResult.finalVerdict} after ${loopResult.rounds} round(s)`
     );
+
+    if (loopResult.converged) {
+      updatePipelineStage(taskId, "review_complete");
+    }
 
     if (!loopResult.converged) {
       // Try to save WIP work
@@ -89,6 +95,7 @@ export async function executeTask(
       try {
         execSync(repo.checkCommand, { cwd: worktree.path, stdio: "pipe" });
         console.log(`  Check passed`);
+        updatePipelineStage(taskId, "check_complete");
       } catch (err) {
         const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
         console.log(`  Check FAILED`);
@@ -104,6 +111,7 @@ export async function executeTask(
       updateTask(taskId, { status: "failed", error: testError });
       return { taskId, success: false, prUrl: null, error: testError };
     }
+    updatePipelineStage(taskId, "test_complete");
 
     const reviewSummaryWithTests = testResult.attempts > 0
       ? `${loopResult.reviewSummary}\n\nTests: passed after ${testResult.attempts} attempt(s)`
@@ -127,7 +135,12 @@ export async function executeTask(
     console.log(`  Creating PR...`);
     const gitResult = commitAndPush(repo, worktree, description, reviewSummaryWithTests);
 
+    if (gitResult.committed) {
+      updatePipelineStage(taskId, "committed");
+    }
+
     if (gitResult.prUrl) {
+      updatePipelineStage(taskId, "pr_created");
       updateTask(taskId, { status: "completed", pr_url: gitResult.prUrl });
       console.log(`  PR: ${gitResult.prUrl}`);
       return { taskId, success: true, prUrl: gitResult.prUrl };
