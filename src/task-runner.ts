@@ -4,6 +4,7 @@ import { createTask, updateTask } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
+import { runTestLoop } from "./test-loop.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
 
@@ -95,9 +96,21 @@ export async function executeTask(
       }
     }
 
+    // Run test loop if configured
+    const testResult = await runTestLoop(config, repo, taskId, worktree.path, description);
+    if (!testResult.passed) {
+      const testError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
+      updateTask(taskId, { status: "failed", error: testError });
+      return { taskId, success: false, prUrl: null, error: testError };
+    }
+
+    const reviewSummaryWithTests = testResult.attempts > 0
+      ? `${loopResult.reviewSummary}\n\nTests: passed after ${testResult.attempts} attempt(s)`
+      : loopResult.reviewSummary;
+
     // Commit, push, and create PR
     console.log(`  Creating PR...`);
-    const gitResult = commitAndPush(repo, worktree, description, loopResult.reviewSummary);
+    const gitResult = commitAndPush(repo, worktree, description, reviewSummaryWithTests);
 
     if (gitResult.prUrl) {
       updateTask(taskId, { status: "completed", pr_url: gitResult.prUrl });
