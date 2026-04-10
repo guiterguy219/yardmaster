@@ -6,6 +6,7 @@ import { detectOscillation } from "./oscillation.js";
 import { runCoder } from "./agents/coder.js";
 import { runStyleReviewer } from "./agents/style-reviewer.js";
 import { runLogicReviewer } from "./agents/logic-reviewer.js";
+import { runToolsAgent } from "./agents/tools-agent.js";
 import { checkAlignment } from "./alignment-gate.js";
 
 export interface ReviewLoopResult {
@@ -127,6 +128,18 @@ export async function runReviewLoop(
   const MAX_ROUNDS = 4;
   let currentPrompt = taskDescription;
   let allIssues: ReviewIssue[] = [];
+
+  // Run tools agent before first coder invocation
+  console.log(`  [Round 1] Running tools advisor...`);
+  try {
+    const toolsResult = await runToolsAgent(config, repo, taskDescription, worktreePath);
+    logAgentRun(taskId, "tools", 1, taskDescription.slice(0, 500), toolsResult.slice(0, 500), 0, toolsResult.length > 0);
+    if (toolsResult.trim()) {
+      currentPrompt = `## Tools & Libraries\n\n${toolsResult.trim()}\n\n${currentPrompt}`;
+    }
+  } catch (err) {
+    console.warn(`  [Round 1] Tools advisor failed, proceeding without recommendations: ${err}`);
+  }
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
     // Step 1: Run coder agent
