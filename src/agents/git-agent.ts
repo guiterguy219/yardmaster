@@ -49,12 +49,12 @@ export function commitAndPush(
     };
   }
 
-  // Create draft PR
+  // Create PR
   try {
     const prBody = `## Task\n\n${taskDescription}\n\n---\n*Created by [Yardmaster](https://github.com/guiterguy219/yardmaster) — autonomous agent orchestration*`;
 
     const prUrl = execSync(
-      `gh pr create --draft --title ${shellEscape(`agent: ${truncate(taskDescription, 60)}`)} --body ${shellEscape(prBody)} --repo "${repo.githubOrg}/${repo.githubRepo}"`,
+      `gh pr create --title ${shellEscape(`agent: ${truncate(taskDescription, 60)}`)} --body ${shellEscape(prBody)} --repo "${repo.githubOrg}/${repo.githubRepo}"`,
       { cwd, encoding: "utf-8" }
     ).trim();
 

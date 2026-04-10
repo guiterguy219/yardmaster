@@ -109,24 +109,17 @@ export async function runReviewLoop(
 
     console.log(`  [Round ${round}] Coder completed in ${(coderResult.durationMs / 1000).toFixed(1)}s`);
 
-    // Step 2: Get diff
+    // Step 2: Get diff (coder edits files but doesn't commit, so stage and diff against HEAD)
     let diff = "";
     try {
-      diff = execSync("git diff HEAD~1", {
+      execSync("git add -A", { cwd: worktreePath, stdio: "pipe" });
+      diff = execSync("git diff --cached", {
         cwd: worktreePath,
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch {
-      try {
-        diff = execSync("git diff HEAD", {
-          cwd: worktreePath,
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-      } catch {
-        diff = "";
-      }
+      diff = "";
     }
 
     // Step 3: Run style reviewer
