@@ -7,6 +7,7 @@ import { enqueueTask, getQueueContents, removeJob, changePriority, closeQueue } 
 import { startWorker, stopWorker } from "./queue/task-worker.js";
 import { PRIORITY, PRIORITY_LABELS, parsePriority, type PriorityLevel } from "./queue/constants.js";
 import { scanReposForIssues } from "./issue-scanner.js";
+import { runDoctor } from "./doctor.js";
 
 const program = new Command();
 
@@ -170,6 +171,15 @@ program
       console.log(`  ${status} ${task.id}  ${task.repo}  ${task.description.slice(0, 60)}${pr}${err}`);
     }
     console.log();
+  });
+
+// ── ym doctor ───────────────────────────────────────────
+program
+  .command("doctor")
+  .description("Run pre-flight checks (git, gh, claude, ssh, redis, repos)")
+  .action(async () => {
+    const exitCode = await runDoctor();
+    process.exit(exitCode);
   });
 
 // ── ym capacity ─────────────────────────────────────────
