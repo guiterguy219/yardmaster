@@ -5,6 +5,7 @@ import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
 import { runTestLoop } from "./test-loop.js";
+import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
 
@@ -107,6 +108,20 @@ export async function executeTask(
     const reviewSummaryWithTests = testResult.attempts > 0
       ? `${loopResult.reviewSummary}\n\nTests: passed after ${testResult.attempts} attempt(s)`
       : loopResult.reviewSummary;
+
+    // Run browser validation if configured (best-effort)
+    console.log(`  Running browser validation...`);
+    const browserResult = await runBrowserValidation(config, repo, worktree.path);
+    if (browserResult.ran && !browserResult.passed) {
+      const browserError = `Browser validation failed: ${browserResult.output.slice(0, 200)}`;
+      updateTask(taskId, { status: "failed", error: browserError });
+      return { taskId, success: false, prUrl: null, error: browserError };
+    }
+    if (!browserResult.ran) {
+      console.log(`  Browser validation skipped: ${browserResult.output}`);
+    } else {
+      console.log(`  Browser validation passed`);
+    }
 
     // Commit, push, and create PR
     console.log(`  Creating PR...`);
