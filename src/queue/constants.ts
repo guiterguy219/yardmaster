@@ -1,3 +1,4 @@
+// Priority levels: lower number = higher priority (P0 is immediate, P4 is background)
 export const PRIORITY = {
   IMMEDIATE: 0,
   URGENT: 1,
