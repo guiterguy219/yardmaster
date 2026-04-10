@@ -1,6 +1,7 @@
 import type { YardmasterConfig } from "./config.js";
 import { runAgent } from "./agent-runner.js";
 import { ALIGNMENT_SYSTEM_PROMPT, buildAlignmentPrompt } from "./prompts/alignment-gate.js";
+import { parseAgentJson } from "./utils/parse-json.js";
 
 export interface AlignmentResult {
   aligned: boolean;
@@ -9,25 +10,15 @@ export interface AlignmentResult {
 }
 
 function parseAlignmentResponse(result: string): AlignmentResult {
-  let text = result.trim();
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    text = fenceMatch[1].trim();
-  }
-
-  try {
-    const parsed = JSON.parse(text) as AlignmentResult;
-    if (typeof parsed.aligned !== "boolean") {
-      return { aligned: true };
-    }
-    return {
-      aligned: parsed.aligned,
-      filteredOutput: parsed.filteredOutput,
-      concern: parsed.concern,
-    };
-  } catch {
+  const parsed = parseAgentJson<AlignmentResult>(result);
+  if (!parsed || typeof parsed.aligned !== "boolean") {
     return { aligned: true };
   }
+  return {
+    aligned: parsed.aligned,
+    filteredOutput: parsed.filteredOutput,
+    concern: parsed.concern,
+  };
 }
 
 export async function checkAlignment(

@@ -1,6 +1,7 @@
 import type { YardmasterConfig } from "../config.js";
 import { runAgent } from "../agent-runner.js";
 import { JUDGE_SYSTEM_PROMPT, buildJudgePrompt } from "../prompts/judge.js";
+import { parseAgentJson } from "../utils/parse-json.js";
 
 export interface JudgeDecision {
   issueDescription: string;
@@ -42,20 +43,13 @@ export async function runJudge(
 }
 
 function parseJudgeOutput(text: string): JudgeResult {
-  let cleaned = text.trim();
-  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    cleaned = fenceMatch[1].trim();
-  }
-
-  try {
-    const parsed = JSON.parse(cleaned) as JudgeResult;
-    return {
-      decisions: Array.isArray(parsed.decisions) ? parsed.decisions : [],
-      overallVerdict: parsed.overallVerdict === "fix_and_ship" ? "fix_and_ship" : "ship",
-      summary: parsed.summary ?? "",
-    };
-  } catch {
+  const parsed = parseAgentJson<JudgeResult>(text);
+  if (!parsed) {
     return { decisions: [], overallVerdict: "ship", summary: "Judge output unparseable — shipping as-is" };
   }
+  return {
+    decisions: Array.isArray(parsed.decisions) ? parsed.decisions : [],
+    overallVerdict: parsed.overallVerdict === "fix_and_ship" ? "fix_and_ship" : "ship",
+    summary: parsed.summary ?? "",
+  };
 }
