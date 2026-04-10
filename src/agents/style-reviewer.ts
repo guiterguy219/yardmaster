@@ -6,9 +6,10 @@ export async function runStyleReviewer(
   config: YardmasterConfig,
   repo: RepoConfig,
   diff: string,
-  worktreePath: string
+  worktreePath: string,
+  priorRoundsContext?: string
 ): Promise<AgentRunResult> {
-  const prompt = buildStyleReviewerPrompt(repo, diff, worktreePath);
+  const prompt = buildStyleReviewerPrompt(repo, diff, worktreePath, priorRoundsContext);
 
   return runAgent(config, {
     prompt,

@@ -36,7 +36,8 @@ Use "revise" if there are any critical or major issues. Use "approve" if there a
 export function buildStyleReviewerPrompt(
   repo: RepoConfig,
   diff: string,
-  worktreePath: string
+  worktreePath: string,
+  priorRoundsContext?: string
 ): string {
   let context = "";
 
@@ -46,11 +47,15 @@ export function buildStyleReviewerPrompt(
     context += `\n\n## Project Conventions (from CLAUDE.md)\n\n${claudeMd}`;
   }
 
+  const priorSection = priorRoundsContext
+    ? `\n\n## Prior Review Rounds\n\nThe following issues were raised and resolved in earlier rounds. Do NOT re-raise these issues or variations of them:\n\n${priorRoundsContext}`
+    : "";
+
   return `## Repository
 
 - Name: ${repo.githubOrg}/${repo.githubRepo}
 - Working directory: ${worktreePath}
-${context}
+${context}${priorSection}
 
 ## Diff to Review
 

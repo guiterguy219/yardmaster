@@ -6,9 +6,10 @@ export async function runLogicReviewer(
   config: YardmasterConfig,
   repo: RepoConfig,
   diff: string,
-  worktreePath: string
+  worktreePath: string,
+  priorRoundsContext?: string
 ): Promise<AgentRunResult> {
-  const prompt = buildLogicReviewerPrompt(repo, diff, worktreePath);
+  const prompt = buildLogicReviewerPrompt(repo, diff, worktreePath, priorRoundsContext);
 
   return runAgent(config, {
     prompt,
