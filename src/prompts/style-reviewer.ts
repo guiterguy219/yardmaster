@@ -1,6 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
 import type { RepoConfig } from "../config.js";
+import { getContextForAgent } from "../context/router.js";
 
 export const STYLE_REVIEWER_SYSTEM_PROMPT = `You are a code style reviewer. Your job is to review a git diff for style issues only — not logic or correctness.
 
@@ -39,13 +38,7 @@ export function buildStyleReviewerPrompt(
   worktreePath: string,
   priorRoundsContext?: string
 ): string {
-  let context = "";
-
-  const claudeMdPath = join(worktreePath, "CLAUDE.md");
-  if (existsSync(claudeMdPath)) {
-    const claudeMd = readFileSync(claudeMdPath, "utf-8");
-    context += `\n\n## Project Conventions (from CLAUDE.md)\n\n${claudeMd}`;
-  }
+  const context = getContextForAgent('style-reviewer', repo.name);
 
   const priorSection = priorRoundsContext
     ? `\n\n## Prior Review Rounds\n\nThe following issues were raised and resolved in earlier rounds. Do NOT re-raise these issues or variations of them:\n\n${priorRoundsContext}`
@@ -55,7 +48,7 @@ export function buildStyleReviewerPrompt(
 
 - Name: ${repo.githubOrg}/${repo.githubRepo}
 - Working directory: ${worktreePath}
-${context}${priorSection}
+${context ? `\n${context}` : ""}${priorSection}
 
 ## Diff to Review
 
