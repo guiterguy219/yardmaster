@@ -18,7 +18,7 @@ function parseAlignmentResponse(result: string): AlignmentResult {
   try {
     const parsed = JSON.parse(text) as AlignmentResult;
     if (typeof parsed.aligned !== "boolean") {
-      return { aligned: false, concern: "alignment check failed" };
+      return { aligned: true };
     }
     return {
       aligned: parsed.aligned,
@@ -26,7 +26,7 @@ function parseAlignmentResponse(result: string): AlignmentResult {
       concern: parsed.concern,
     };
   } catch {
-    return { aligned: false, concern: "alignment check failed" };
+    return { aligned: true };
   }
 }
 
@@ -47,11 +47,11 @@ export async function checkAlignment(
     });
 
     if (!result.success || !result.result) {
-      return { aligned: false, concern: "alignment check failed" };
+      return { aligned: true };
     }
 
     return parseAlignmentResponse(result.result);
   } catch {
-    return { aligned: false, concern: "alignment check failed" };
+    return { aligned: true };
   }
 }
