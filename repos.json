@@ -1,0 +1,60 @@
+{
+  "repos": [
+    {
+      "name": "shield-api",
+      "path": "~/code/nfc-assure/shield-api",
+      "org": "fc-safety",
+      "repo": "shield-api",
+      "branch": "main"
+    },
+    {
+      "name": "shield",
+      "path": "~/code/nfc-assure/shield",
+      "org": "fc-safety",
+      "repo": "shield",
+      "branch": "main"
+    },
+    {
+      "name": "threatzero-api",
+      "path": "~/code/threatzero/threatzero-api",
+      "org": "threatzero-solutions",
+      "repo": "threatzero-api",
+      "branch": "main"
+    },
+    {
+      "name": "threatzero-app",
+      "path": "~/code/threatzero/threatzero-app",
+      "org": "threatzero-solutions",
+      "repo": "threatzero-app",
+      "branch": "main"
+    },
+    {
+      "name": "legacy-made-web",
+      "path": "~/code/legacy-made/legacy-made-web",
+      "org": "Legacy-Made-LLC",
+      "repo": "legacy-made-web",
+      "branch": "main"
+    },
+    {
+      "name": "legacy-made-api",
+      "path": "~/code/legacy-made/legacy-made-api",
+      "org": "Legacy-Made-LLC",
+      "repo": "legacy-made-api",
+      "branch": "main"
+    },
+    {
+      "name": "legacy-made",
+      "path": "~/code/legacy-made/legacy-made",
+      "org": "Legacy-Made-LLC",
+      "repo": "legacy-made",
+      "branch": "main"
+    },
+    {
+      "name": "yardmaster",
+      "path": "~/code/gibson-ops/yardmaster",
+      "org": "guiterguy219",
+      "repo": "yardmaster",
+      "branch": "main"
+    }
+  ]
+}
