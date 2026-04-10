@@ -6,6 +6,7 @@ import { detectOscillation } from "./oscillation.js";
 import { runCoder } from "./agents/coder.js";
 import { runStyleReviewer } from "./agents/style-reviewer.js";
 import { runLogicReviewer } from "./agents/logic-reviewer.js";
+import { checkAlignment } from "./alignment-gate.js";
 
 export interface ReviewLoopResult {
   converged: boolean;
@@ -49,6 +50,50 @@ function filterIssuesBySeverity(issues: ReviewIssue[], round: number): ReviewIss
   if (round <= 2) return issues;
   if (round === 3) return issues.filter((i) => i.severity === "major" || i.severity === "critical");
   return issues.filter((i) => i.severity === "critical");
+}
+
+async function applyAlignmentFilter(
+  config: YardmasterConfig,
+  parsed: ReviewOutput,
+  agentName: string,
+  taskDescription: string,
+  taskId: string,
+  round: number
+): Promise<ReviewOutput> {
+  const alignment = await checkAlignment(
+    config,
+    taskDescription,
+    agentName,
+    JSON.stringify(parsed.issues)
+  );
+  logAgentRun(
+    taskId,
+    "alignment",
+    round,
+    `Alignment check for ${agentName}`,
+    JSON.stringify(alignment).slice(0, 500),
+    0,
+    alignment.aligned
+  );
+  if (!alignment.aligned && !alignment.filteredOutput) {
+    console.warn(`  [Round ${round}] Alignment gate flagged ${agentName} as misaligned: ${alignment.concern}`);
+    return { verdict: "approve", issues: [] };
+  }
+  if (alignment.aligned && alignment.filteredOutput) {
+    try {
+      const filtered = JSON.parse(alignment.filteredOutput);
+      if (Array.isArray(filtered)) {
+        const filteredIssues = filtered as ReviewIssue[];
+        return {
+          issues: filteredIssues,
+          verdict: filteredIssues.length === 0 ? "approve" : parsed.verdict,
+        };
+      }
+    } catch {
+      // keep original issues if parse fails
+    }
+  }
+  return parsed;
 }
 
 function buildFeedbackPrompt(taskDescription: string, issues: ReviewIssue[]): string {
@@ -98,7 +143,7 @@ export async function runReviewLoop(
       coderResult.success
     );
 
-    if (!coderResult.success) {
+    if (!coderResult.success || !coderResult.result) {
       return {
         converged: false,
         rounds: round,
@@ -108,6 +153,32 @@ export async function runReviewLoop(
     }
 
     console.log(`  [Round ${round}] Coder completed in ${(coderResult.durationMs / 1000).toFixed(1)}s`);
+
+    // Alignment gate: check coder output
+    const coderAlignment = await checkAlignment(
+      config,
+      taskDescription,
+      "coder",
+      coderResult.result
+    );
+    logAgentRun(
+      taskId,
+      "alignment",
+      round,
+      "Alignment check for coder",
+      JSON.stringify(coderAlignment).slice(0, 500),
+      0,
+      coderAlignment.aligned
+    );
+    if (!coderAlignment.aligned) {
+      console.log(`  [Round ${round}] Coder alignment concern: ${coderAlignment.concern}`);
+      return {
+        converged: false,
+        rounds: round,
+        finalVerdict: "needs_human_review",
+        issues: allIssues,
+      };
+    }
 
     // Step 2: Get diff (coder edits files but doesn't commit, so stage and diff against HEAD)
     let diff = "";
@@ -125,7 +196,7 @@ export async function runReviewLoop(
     // Step 3: Run style reviewer
     console.log(`  [Round ${round}] Running style reviewer...`);
     const styleResult = await runStyleReviewer(config, repo, diff, worktreePath);
-    const styleParsed = parseReviewerOutput(styleResult.result);
+    let styleParsed = parseReviewerOutput(styleResult.result);
 
     logAgentRun(
       taskId,
@@ -136,12 +207,16 @@ export async function runReviewLoop(
       styleResult.durationMs,
       styleResult.success
     );
+
+    // Alignment gate: filter style issues
+    styleParsed = await applyAlignmentFilter(config, styleParsed, "style", taskDescription, taskId, round);
+
     logReviewRound(taskId, round, "style", styleParsed.verdict, styleParsed.issues, diff);
 
     // Step 4: Run logic reviewer
     console.log(`  [Round ${round}] Running logic reviewer...`);
     const logicResult = await runLogicReviewer(config, repo, diff, worktreePath);
-    const logicParsed = parseReviewerOutput(logicResult.result);
+    let logicParsed = parseReviewerOutput(logicResult.result);
 
     logAgentRun(
       taskId,
@@ -152,6 +227,10 @@ export async function runReviewLoop(
       logicResult.durationMs,
       logicResult.success
     );
+
+    // Alignment gate: filter logic issues
+    logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", taskDescription, taskId, round);
+
     logReviewRound(taskId, round, "logic", logicParsed.verdict, logicParsed.issues, diff);
 
     // Step 5: Both approve?
