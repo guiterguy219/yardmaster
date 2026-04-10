@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import { execSync, spawnSync } from "child_process";
 import { Command } from "commander";
 import { executeTask } from "./task-runner.js";
 import { loadConfig, getRepo } from "./config.js";
@@ -212,6 +213,59 @@ program
   .action(async () => {
     const exitCode = await runDoctor();
     process.exit(exitCode);
+  });
+
+// ── ym worker-status ────────────────────────────────────
+program
+  .command("worker-status")
+  .description("Show systemd service, Redis, queue depth, and last task")
+  .action(async () => {
+    // systemd service status
+    let serviceStatus: string;
+    {
+      const result = spawnSync("systemctl", ["is-active", "yardmaster"], {
+        timeout: 3000,
+        killSignal: "SIGTERM",
+        encoding: "utf8",
+      });
+      serviceStatus = result.error ? "not running" : ((result.stdout as string).trim() || "not running");
+    }
+
+    // Redis status
+    let redisStatus: string;
+    try {
+      const pong = execSync("redis-cli ping", { timeout: 3000 }).toString().trim();
+      redisStatus = pong === "PONG" ? "ok" : pong;
+    } catch {
+      redisStatus = "unavailable";
+    }
+
+    // Queue depth and last task — always close queue connection
+    let queueDepth: number | string = 0;
+    let last: ReturnType<typeof getRecentTasks>[number] | undefined;
+    try {
+      const queue = await getQueueContents();
+      queueDepth = queue.length;
+      const recent = getRecentTasks(1);
+      last = recent[0];
+    } catch {
+      queueDepth = "unavailable";
+    } finally {
+      await closeQueue();
+    }
+
+    console.log(`\nWorker status:`);
+    console.log(`  Service:     ${serviceStatus}`);
+    console.log(`  Redis:       ${redisStatus}`);
+    console.log(`  Queue depth: ${queueDepth}`);
+    if (last) {
+      const pr = last.pr_url ? ` -> ${last.pr_url}` : "";
+      const err = last.error ? ` (${last.error})` : "";
+      console.log(`  Last task:   ${formatStatus(last.status)} ${last.repo}  ${(last.description ?? "").slice(0, 60)}${pr}${err}`);
+    } else {
+      console.log(`  Last task:   none`);
+    }
+    console.log();
   });
 
 // ── ym capacity ─────────────────────────────────────────
