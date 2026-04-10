@@ -13,6 +13,9 @@ import { runDoctor } from "./doctor.js";
 import { onboardRepo } from "./onboarding.js";
 import { detectAndMarkInterrupted, recoverInterruptedTasks } from "./recovery.js";
 import { removeOrphanedWorktrees } from "./worktree.js";
+import { ingestRepo } from "./ingestor.js";
+import { listContext, getContext, getContextById, searchContext, type ContextKind } from "./context-store.js";
+import { getContextStats, ALL_AGENT_ROLES } from "./context/router.js";
 
 const program = new Command();
 
@@ -306,6 +309,157 @@ program
       }
       console.log();
     }
+  });
+
+// ── shared ingest helper ───────────────────────────────
+async function runIngest(repoName: string): Promise<void> {
+  const config = loadConfig();
+  const repo = getRepo(config, repoName);
+
+  console.log(`\nYardmaster — Ingest context`);
+  console.log(`  Repo: ${repo.name}`);
+  console.log(`  Path: ${repo.localPath}\n`);
+
+  const result = await ingestRepo(config, repo.name, repo.localPath);
+
+  console.log(`\nIngest complete:`);
+  console.log(`  Files scanned:    ${result.filesScanned}`);
+  console.log(`  Files changed:    ${result.filesChanged}`);
+  console.log(`  Chunks upserted:  ${result.chunksUpserted}`);
+  console.log(`  Deps upserted:    ${result.depsUpserted}`);
+  if (result.errors.length > 0) {
+    console.log(`  Errors:`);
+    for (const err of result.errors) {
+      console.log(`    - ${err}`);
+    }
+  }
+  console.log();
+}
+
+// ── ym ingest ──────────────────────────────────────────
+program
+  .command("ingest")
+  .description("Ingest CLAUDE.md and config files into the context store")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .action(async (opts: { repo: string }) => {
+    await runIngest(opts.repo);
+  });
+
+// ── ym context ─────────────────────────────────────────
+const contextCmd = program
+  .command("context")
+  .description("Manage the context store (search, lookup, ingest, stats)");
+
+contextCmd
+  .command("search")
+  .description("Search context entries by keyword")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .argument("<query>", "Search term to match against key and content")
+  .option("--kind <kind>", "Filter by kind: file, dependency, convention, snippet, note")
+  .action((query: string, opts: { repo: string; kind?: string }) => {
+    const kind = opts.kind as ContextKind | undefined;
+    const escapedQuery = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const entries = searchContext(opts.repo, escapedQuery, kind);
+
+    if (entries.length === 0) {
+      console.log(`No context entries matching "${query}" for ${opts.repo}.`);
+      return;
+    }
+
+    console.log(`\nFound ${entries.length} entries matching "${query}":\n`);
+    for (const entry of entries) {
+      const roles = entry.agentRoles.length > 0 ? entry.agentRoles.join(", ") : "all";
+      const preview = entry.content.slice(0, 80).replace(/\n/g, " ");
+      console.log(`  [${entry.kind}] ${entry.key}`);
+      console.log(`    id: ${entry.id}  roles: ${roles}`);
+      console.log(`    ${preview}${entry.content.length > 80 ? "..." : ""}`);
+    }
+    console.log();
+  });
+
+contextCmd
+  .command("lookup")
+  .description("Look up a specific context entry by id or by repo/kind/key")
+  .option("--id <id>", "Lookup by entry ID")
+  .option("--repo <name>", "Repository name")
+  .option("--kind <kind>", "Entry kind: file, dependency, convention, snippet, note")
+  .option("--key <key>", "Entry key")
+  .action((opts: { id?: string; repo?: string; kind?: string; key?: string }) => {
+    let entry;
+
+    if (opts.id) {
+      const id = parseInt(opts.id, 10);
+      if (Number.isNaN(id)) {
+        console.error("Error: --id must be a number");
+        process.exit(1);
+      }
+      entry = getContextById(id);
+    } else if (opts.repo && opts.kind && opts.key) {
+      entry = getContext(opts.repo, opts.kind as ContextKind, opts.key);
+    } else {
+      console.error("Error: provide --id or all of --repo, --kind, and --key");
+      process.exit(1);
+    }
+
+    if (!entry) {
+      console.log("No matching context entry found.");
+      return;
+    }
+
+    const roles = entry.agentRoles.length > 0 ? entry.agentRoles.join(", ") : "all";
+    console.log(`\n  ID:      ${entry.id}`);
+    console.log(`  Repo:    ${entry.repo}`);
+    console.log(`  Kind:    ${entry.kind}`);
+    console.log(`  Key:     ${entry.key}`);
+    console.log(`  Roles:   ${roles}`);
+    console.log(`  Hash:    ${entry.contentHash.slice(0, 12)}...`);
+    console.log(`  Created: ${entry.createdAt}`);
+    console.log(`  Updated: ${entry.updatedAt}`);
+    console.log(`\n--- Content ---\n${entry.content}\n`);
+  });
+
+contextCmd
+  .command("ingest")
+  .description("Ingest CLAUDE.md and config files into the context store")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .action(async (opts: { repo: string }) => {
+    await runIngest(opts.repo);
+  });
+
+contextCmd
+  .command("stats")
+  .description("Show context budget usage per agent role")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .action((opts: { repo: string }) => {
+    const roles = ALL_AGENT_ROLES;
+    const entries = listContext(opts.repo);
+
+    console.log(`\nContext stats for ${opts.repo}:\n`);
+
+    // Entry breakdown by kind
+    const kindCounts = new Map<string, number>();
+    for (const entry of entries) {
+      kindCounts.set(entry.kind, (kindCounts.get(entry.kind) ?? 0) + 1);
+    }
+    console.log(`  Total entries: ${entries.length}`);
+    for (const [kind, count] of kindCounts) {
+      console.log(`    ${kind}: ${count}`);
+    }
+
+    // Per-role budget stats
+    console.log(`\n  Budget usage by role:\n`);
+    console.log(`  ${"Role".padEnd(18)} ${"Budget".padStart(7)} ${"Used".padStart(7)} ${"Entries".padStart(8)}  Fill`);
+    console.log(`  ${"─".repeat(18)} ${"─".repeat(7)} ${"─".repeat(7)} ${"─".repeat(8)}  ${"─".repeat(5)}`);
+
+    for (const role of roles) {
+      const stats = getContextStats(role, opts.repo);
+      const pct = stats.budget > 0 ? Math.round((stats.formattedLength / stats.budget) * 100) : 0;
+      const bar = pct > 90 ? "██▓" : pct > 50 ? "██░" : pct > 0 ? "█░░" : "░░░";
+      console.log(
+        `  ${role.padEnd(18)} ${String(stats.budget).padStart(7)} ${String(stats.formattedLength).padStart(7)} ${String(stats.entriesAvailable).padStart(8)}  ${bar} ${pct}%`
+      );
+    }
+    console.log();
   });
 
 // ── ym capacity ─────────────────────────────────────────
