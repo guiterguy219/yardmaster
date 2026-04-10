@@ -14,8 +14,33 @@ import { onboardRepo } from "./onboarding.js";
 import { detectAndMarkInterrupted, recoverInterruptedTasks } from "./recovery.js";
 import { removeOrphanedWorktrees } from "./worktree.js";
 import { ingestRepo } from "./ingestor.js";
+import { ingestDocs, searchDocsUrls, pruneStaleDocEntries, type DocsIngestResult } from "./context/ingest-docs.js";
+import { purgeStaleWebDocs } from "./context/maintenance.js";
 import { listContext, getContext, getContextById, searchContext, type ContextKind } from "./context-store.js";
 import { getContextStats, ALL_AGENT_ROLES } from "./context/router.js";
+
+function printIngestResult(result: DocsIngestResult): void {
+  console.log(`\nDocs ingestion complete:`);
+  console.log(`  URLs processed: ${result.urlsProcessed}`);
+  console.log(`  URLs changed:   ${result.urlsChanged}`);
+  console.log(`  Chunks upserted: ${result.chunksUpserted}`);
+  if (result.errors.length > 0) {
+    console.log(`  Errors: ${result.errors.length}`);
+    for (const err of result.errors) {
+      console.log(`    - ${err}`);
+    }
+  }
+  console.log();
+}
+
+function parseDays(raw: string): number {
+  const days = parseInt(raw, 10);
+  if (Number.isNaN(days) || days < 1) {
+    console.error("Error: --days must be a positive number");
+    process.exit(1);
+  }
+  return days;
+}
 
 const program = new Command();
 
@@ -424,6 +449,80 @@ contextCmd
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .action(async (opts: { repo: string }) => {
     await runIngest(opts.repo);
+  });
+
+contextCmd
+  .command("ingest-docs")
+  .description("Fetch, chunk, and store web documentation pages")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .requiredOption("--lib <name>", "Library name (used as key prefix, e.g. 'zod')")
+  .argument("<urls...>", "One or more documentation URLs to ingest")
+  .action(async (urls: string[], opts: { repo: string; lib: string }) => {
+    const config = loadConfig();
+    const repo = getRepo(config, opts.repo);
+
+    console.log(`\nIngesting docs for "${opts.lib}" into ${opts.repo} context store`);
+    console.log(`  URLs: ${urls.length}\n`);
+
+    const result = await ingestDocs(config, opts.repo, opts.lib, urls, repo.localPath);
+    printIngestResult(result);
+  });
+
+contextCmd
+  .command("prune-docs")
+  .description("Remove stale documentation entries older than N days")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .option("--days <n>", "Remove entries older than this many days", "30")
+  .action((opts: { repo: string; days: string }) => {
+    const days = parseDays(opts.days);
+
+    const removed = pruneStaleDocEntries(opts.repo, days);
+    console.log(`\nPruned ${removed} stale doc entries (older than ${days} days) for ${opts.repo}.\n`);
+  });
+
+contextCmd
+  .command("docs")
+  .description("Search the web for documentation, then fetch, chunk, and store it")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .requiredOption("--lib <name>", "Library name (used as key prefix, e.g. 'zod')")
+  .argument("<query>", "Search query to find documentation pages")
+  .action(async (query: string, opts: { repo: string; lib: string }) => {
+    const config = loadConfig();
+    const repo = getRepo(config, opts.repo);
+
+    console.log(`\nSearching for "${opts.lib}" docs: ${query}`);
+
+    const urls = await searchDocsUrls(config, query, opts.lib, repo.localPath);
+
+    if (urls.length === 0) {
+      console.log(`  No documentation URLs found for "${query}".`);
+      console.log(`  Try providing URLs directly with: ym context ingest-docs --repo ${opts.repo} --lib ${opts.lib} <urls...>\n`);
+      return;
+    }
+
+    console.log(`  Found ${urls.length} documentation URLs:`);
+    for (const url of urls) {
+      console.log(`    - ${url}`);
+    }
+    console.log();
+
+    const result = await ingestDocs(config, opts.repo, opts.lib, urls, repo.localPath);
+    printIngestResult(result);
+  });
+
+contextCmd
+  .command("purge")
+  .description("Purge stale web doc entries and their raw content hashes")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .option("--days <n>", "Remove entries older than this many days", "30")
+  .action((opts: { repo: string; days: string }) => {
+    const days = parseDays(opts.days);
+
+    const result = purgeStaleWebDocs(opts.repo, days);
+    console.log(`\nPurged stale web docs for ${opts.repo} (older than ${days} days):`);
+    console.log(`  Doc entries removed:  ${result.entriesRemoved}`);
+    console.log(`  Raw hashes removed:   ${result.rawHashesRemoved}`);
+    console.log();
   });
 
 contextCmd

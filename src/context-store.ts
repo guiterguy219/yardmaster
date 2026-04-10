@@ -199,6 +199,26 @@ export function searchContext(
 }
 
 // ---------------------------------------------------------------------------
+// Cache freshness
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if the repo has context entries updated within the given
+ * number of minutes. Useful for skipping re-ingestion when context is fresh.
+ */
+export function hasRecentEntries(repo: string, withinMinutes: number): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM context_entries
+       WHERE repo = ? AND updated_at > datetime('now', ?)
+       LIMIT 1`
+    )
+    .get(repo, `-${withinMinutes} minutes`) as { 1: number } | undefined;
+
+  return row !== undefined;
+}
+
+// ---------------------------------------------------------------------------
 // File ingestion helpers
 // ---------------------------------------------------------------------------
 
