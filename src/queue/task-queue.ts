@@ -83,16 +83,17 @@ export async function removeJob(jobId: string): Promise<void> {
 export async function changePriority(
   jobId: string,
   newPriority: PriorityLevel
-): Promise<void> {
+): Promise<string> {
   const queue = getQueue();
   const job = await queue.getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
 
   const data = job.data as TaskJobData;
   await job.remove();
-  await queue.add("task", { ...data, priority: newPriority }, {
+  const newJob = await queue.add("task", { ...data, priority: newPriority }, {
     priority: toBullMQPriority(newPriority),
   });
+  return newJob.id!;
 }
 
 export async function closeQueue(): Promise<void> {
