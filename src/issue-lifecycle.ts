@@ -43,14 +43,15 @@ export function commentOnIssue(issueRef: string, body: string): void {
 }
 
 /**
- * Add labels to a GitHub issue. Best-effort — never throws.
+ * Add and/or remove labels on a GitHub issue. Best-effort — never throws.
  */
 export function updateIssueLabels(
   issueRef: string,
-  labels: string[]
+  add: string[],
+  remove: string[] = []
 ): void {
   try {
-    if (labels.length === 0) return;
+    if (add.length === 0 && remove.length === 0) return;
     const parsed = parseIssueRef(issueRef);
     if (!parsed) return;
 
@@ -59,8 +60,11 @@ export function updateIssueLabels(
       String(parsed.number),
       "--repo", `${parsed.owner}/${parsed.repo}`,
     ];
-    for (const label of labels) {
+    for (const label of add) {
       args.push("--add-label", label);
+    }
+    for (const label of remove) {
+      args.push("--remove-label", label);
     }
 
     execFileSync("gh", args, { encoding: "utf-8", stdio: "pipe" });
@@ -88,7 +92,7 @@ export function notifyStarted(issueRef: string, taskId: string): void {
     issueRef,
     `🤖 **Yardmaster** — Work started\n\nTask \`${taskId}\` is now being worked on by an agent.`
   );
-  updateIssueLabels(issueRef, ["ym-in-progress"]);
+  updateIssueLabels(issueRef, ["ym-in-progress"], ["ym-queued"]);
 }
 
 /**
@@ -103,7 +107,7 @@ export function notifyPrCreated(
     issueRef,
     `🤖 **Yardmaster** — PR created\n\nTask \`${taskId}\` has a pull request ready for review: ${prUrl}`
   );
-  updateIssueLabels(issueRef, ["ym-pr-created"]);
+  updateIssueLabels(issueRef, ["ym-pr-created"], ["ym-in-progress", "ym-queued"]);
 }
 
 /**
@@ -121,5 +125,5 @@ export function notifyFailed(
     issueRef,
     `🤖 **Yardmaster** — Task failed\n\nTask \`${taskId}\` failed:\n\n\`\`\`\n${truncatedError}\n\`\`\``
   );
-  updateIssueLabels(issueRef, ["ym-failed"]);
+  updateIssueLabels(issueRef, ["ym-failed"], ["ym-in-progress", "ym-queued"]);
 }
