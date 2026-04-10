@@ -55,7 +55,8 @@
       "org": "guiterguy219",
       "repo": "yardmaster",
       "branch": "main",
-      "checkCommand": "npx tsc --noEmit"
+      "checkCommand": "npx tsc --noEmit",
+      "testCommand": "npx vitest run"
     }
   ]
 }
