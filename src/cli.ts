@@ -16,6 +16,7 @@ import { removeOrphanedWorktrees } from "./worktree.js";
 import { ingestRepo } from "./ingestor.js";
 import { ingestDocs, searchDocsUrls, pruneStaleDocEntries, type DocsIngestResult } from "./context/ingest-docs.js";
 import { purgeStaleWebDocs } from "./context/maintenance.js";
+import { ingestTaskHistory } from "./context/ingest-history.js";
 import { listContext, getContext, getContextById, searchContext, type ContextKind } from "./context-store.js";
 import { getContextStats, ALL_AGENT_ROLES } from "./context/router.js";
 
@@ -559,6 +560,81 @@ contextCmd
       );
     }
     console.log();
+  });
+
+contextCmd
+  .command("history")
+  .description("Analyze completed task history and extract insights")
+  .requiredOption("--repo <name>", "Target repository name (from repos.json)")
+  .action(async (opts: { repo: string }) => {
+    const config = loadConfig();
+    getRepo(config, opts.repo); // validate repo exists
+
+    console.log(`\nAnalyzing task history for ${opts.repo}...`);
+    const result = await ingestTaskHistory(config, opts.repo);
+
+    if (result.insights === 0 && result.tasksAnalyzed === 0) {
+      console.log(`No new tasks to analyze for ${opts.repo}.\n`);
+      return;
+    }
+
+    if (result.insights === 0) {
+      console.log(`Analyzed ${result.tasksAnalyzed} tasks but extracted no insights.\n`);
+      return;
+    }
+
+    console.log(`Analyzed ${result.tasksAnalyzed} tasks for ${opts.repo}`);
+    console.log(`Stored ${result.insights} insights.`);
+
+    // Show the stored insights
+    const entries = searchContext(opts.repo, "history:");
+    for (const entry of entries) {
+      if (entry.key === "history:last-analyzed") continue;
+      const preview = entry.content.slice(0, 60).replace(/\n/g, " ");
+      console.log(`  - ${entry.key} — ${preview}${entry.content.length > 60 ? "..." : ""}`);
+    }
+    console.log();
+  });
+
+contextCmd
+  .command("maintenance")
+  .description("Run all context maintenance tasks (purge stale docs + ingest history)")
+  .option("--repo <name>", "Target repository name (or all repos if omitted)")
+  .action(async (opts: { repo?: string }) => {
+    const config = loadConfig();
+    const repos = opts.repo
+      ? [getRepo(config, opts.repo)]
+      : config.repos;
+
+    console.log(`\nRunning context maintenance...\n`);
+
+    // Step 1: purge stale web docs
+    for (const repo of repos) {
+      const purgeResult = purgeStaleWebDocs(repo.name);
+      if (purgeResult.entriesRemoved > 0 || purgeResult.rawHashesRemoved > 0) {
+        console.log(`  Purge (${repo.name}): ${purgeResult.entriesRemoved} doc entries, ${purgeResult.rawHashesRemoved} raw hashes removed`);
+      } else {
+        console.log(`  Purge (${repo.name}): nothing to purge`);
+      }
+    }
+
+    // Step 2: ingest task history
+    for (const repo of repos) {
+      try {
+        const historyResult = await ingestTaskHistory(config, repo.name);
+        if (historyResult.insights > 0) {
+          console.log(`  History (${repo.name}): ${historyResult.insights} insights from ${historyResult.tasksAnalyzed} tasks`);
+        } else if (historyResult.tasksAnalyzed > 0) {
+          console.log(`  History (${repo.name}): analyzed ${historyResult.tasksAnalyzed} tasks, no new insights`);
+        } else {
+          console.log(`  History (${repo.name}): no new tasks to analyze`);
+        }
+      } catch {
+        console.log(`  History (${repo.name}): failed (best effort)`);
+      }
+    }
+
+    console.log(`\nMaintenance complete.\n`);
   });
 
 // ── ym capacity ─────────────────────────────────────────
