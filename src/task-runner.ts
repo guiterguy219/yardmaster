@@ -94,7 +94,7 @@ export async function executeTask(
 
     // Commit, push, and create PR
     console.log(`  Creating PR...`);
-    const gitResult = commitAndPush(repo, worktree, description);
+    const gitResult = commitAndPush(repo, worktree, description, loopResult.reviewSummary);
 
     if (gitResult.prUrl) {
       updateTask(taskId, { status: "completed", pr_url: gitResult.prUrl });

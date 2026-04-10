@@ -12,7 +12,8 @@ export interface GitAgentResult {
 export function commitAndPush(
   repo: RepoConfig,
   worktree: Worktree,
-  taskDescription: string
+  taskDescription: string,
+  reviewSummary?: string
 ): GitAgentResult {
   const cwd = worktree.path;
 
@@ -51,7 +52,8 @@ export function commitAndPush(
 
   // Create PR
   try {
-    const prBody = `## Task\n\n${taskDescription}\n\n---\n*Created by [Yardmaster](https://github.com/guiterguy219/yardmaster) — autonomous agent orchestration*`;
+    const reviewSection = reviewSummary ? `\n\n## Review Summary\n\n${reviewSummary}` : "";
+    const prBody = `## Task\n\n${taskDescription}${reviewSection}\n\n---\n*Created by [Yardmaster](https://github.com/guiterguy219/yardmaster) — autonomous agent orchestration*`;
 
     const prUrl = execSync(
       `gh pr create --title ${shellEscape(`agent: ${truncate(taskDescription, 60)}`)} --body ${shellEscape(prBody)} --repo "${repo.githubOrg}/${repo.githubRepo}"`,
