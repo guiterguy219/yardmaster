@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import type { YardmasterConfig, RepoConfig } from "./config.js";
 import { logAgentRun } from "./db.js";
 import { logReviewRound, getReviewHistory } from "./diff-ledger.js";
@@ -131,10 +131,12 @@ function buildPriorRoundsContext(taskId: string, currentRound: number): string {
   for (const entry of priorEntries) {
     const issues = JSON.parse(entry.issues_json) as ReviewIssue[];
     if (issues.length === 0) continue;
-    lines.push(`Round ${entry.round} (${entry.agent}): ${entry.verdict}`);
-    for (const issue of issues) {
-      lines.push(`  - [${issue.severity}] ${issue.file}: ${issue.description} → RESOLVED`);
-    }
+    const topics = issues
+      .slice(0, 3)
+      .map((i) => i.description.split(/\s+/).slice(0, 4).join(" "))
+      .join(", ");
+    const line = `Round ${entry.round} (${entry.agent}): ${entry.verdict} — ${issues.length} issues${topics ? ` (${topics})` : ""} — all RESOLVED`;
+    lines.push(line.slice(0, 150));
   }
 
   return lines.join("\n");
@@ -153,13 +155,17 @@ async function runSubTaskReviewLoop(
   originalTaskDescription: string,
   subTaskIndex: number,
   totalSubTasks: number,
-  toolsContext: string
+  toolsContext: string,
+  subTaskFiles?: string[]
 ): Promise<{ converged: boolean; rounds: number; roundSummaries: string[]; issues: ReviewIssue[]; judgeUsed: boolean }> {
   const MAX_ROUNDS = 4;
   const prefix = totalSubTasks > 1 ? `[${subTaskIndex + 1}/${totalSubTasks}]` : "";
   let currentPrompt = toolsContext ? `## Tools & Libraries\n\n${toolsContext}\n\n${subTaskDescription}` : subTaskDescription;
   let allIssues: ReviewIssue[] = [];
   const roundSummaries: string[] = [];
+
+  const styleApprovedFiles = new Set<string>();
+  const logicApprovedFiles = new Set<string>();
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
     // Step 1: Run coder
@@ -179,7 +185,11 @@ async function runSubTaskReviewLoop(
     let diff = "";
     try {
       execSync("git add -A", { cwd: worktreePath, stdio: "pipe" });
-      diff = execSync("git diff --cached", { cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      if (subTaskFiles && subTaskFiles.length > 0) {
+        diff = execFileSync("git", ["diff", "--cached", "--", ...subTaskFiles], { cwd: worktreePath, encoding: "utf-8" });
+      } else {
+        diff = execSync("git diff --cached", { cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      }
     } catch {
       diff = "";
     }
@@ -187,29 +197,75 @@ async function runSubTaskReviewLoop(
     // Step 3: Build prior rounds context for reviewers
     const priorContext = buildPriorRoundsContext(taskId, round);
 
-    // Step 4: Run style reviewer
-    console.log(`  ${prefix} [Round ${round}] Running style reviewer...`);
-    const styleResult = await runStyleReviewer(config, repo, diff, worktreePath, priorContext);
-    let styleParsed = parseReviewerOutput(styleResult.result);
+    // Step 4: Get changed file names for reviewer skip logic
+    let changedFiles: string[] = [];
+    try {
+      const nameOnly = execSync("git diff --cached --name-only", { cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      changedFiles = nameOnly.trim().split("\n").filter(Boolean);
+    } catch {
+      changedFiles = [];
+    }
 
-    logAgentRun(taskId, "style", round, `Review diff (${diff.length} chars)`, styleResult.result.slice(0, 500), styleResult.durationMs, styleResult.success);
+    // Invalidate approvals for any file the coder just touched — approval only
+    // persists for files that were not modified in the current round.
+    changedFiles.forEach((f) => {
+      styleApprovedFiles.delete(f);
+      logicApprovedFiles.delete(f);
+    });
 
-    const styleBeforeCount = styleParsed.issues.length;
-    styleParsed = await applyAlignmentFilter(config, styleParsed, "style", originalTaskDescription, taskId, round);
-    const styleFilteredCount = styleBeforeCount - styleParsed.issues.length;
+    // Step 5: Run style reviewer (skip if all changed files already approved)
+    const styleAllApproved = changedFiles.length > 0 && changedFiles.every((f) => styleApprovedFiles.has(f));
+    let styleParsed: ReviewOutput;
+    let styleFilteredCount = 0;
+
+    if (styleAllApproved) {
+      console.log(`  ${prefix} [Round ${round}] Skipping style reviewer (all changed files previously approved)`);
+      styleParsed = { verdict: "approve", issues: [] };
+    } else {
+      console.log(`  ${prefix} [Round ${round}] Running style reviewer...`);
+      const styleResult = await runStyleReviewer(config, repo, diff, worktreePath, priorContext);
+      styleParsed = parseReviewerOutput(styleResult.result);
+
+      logAgentRun(taskId, "style", round, `Review diff (${diff.length} chars)`, styleResult.result.slice(0, 500), styleResult.durationMs, styleResult.success);
+
+      if (styleParsed.verdict !== "approve") {
+        const styleBeforeCount = styleParsed.issues.length;
+        styleParsed = await applyAlignmentFilter(config, styleParsed, "style", originalTaskDescription, taskId, round);
+        styleFilteredCount = styleBeforeCount - styleParsed.issues.length;
+      }
+    }
+
+    if (styleParsed.verdict === "approve") {
+      changedFiles.forEach((f) => styleApprovedFiles.add(f));
+    }
 
     logReviewRound(taskId, round, "style", styleParsed.verdict, styleParsed.issues, diff);
 
-    // Step 5: Run logic reviewer
-    console.log(`  ${prefix} [Round ${round}] Running logic reviewer...`);
-    const logicResult = await runLogicReviewer(config, repo, diff, worktreePath, priorContext);
-    let logicParsed = parseReviewerOutput(logicResult.result);
+    // Step 6: Run logic reviewer (skip if all changed files already approved)
+    const logicAllApproved = changedFiles.length > 0 && changedFiles.every((f) => logicApprovedFiles.has(f));
+    let logicParsed: ReviewOutput;
+    let logicFilteredCount = 0;
 
-    logAgentRun(taskId, "logic", round, `Review diff (${diff.length} chars)`, logicResult.result.slice(0, 500), logicResult.durationMs, logicResult.success);
+    if (logicAllApproved) {
+      console.log(`  ${prefix} [Round ${round}] Skipping logic reviewer (all changed files previously approved)`);
+      logicParsed = { verdict: "approve", issues: [] };
+    } else {
+      console.log(`  ${prefix} [Round ${round}] Running logic reviewer...`);
+      const logicResult = await runLogicReviewer(config, repo, diff, worktreePath, priorContext);
+      logicParsed = parseReviewerOutput(logicResult.result);
 
-    const logicBeforeCount = logicParsed.issues.length;
-    logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round);
-    const logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
+      logAgentRun(taskId, "logic", round, `Review diff (${diff.length} chars)`, logicResult.result.slice(0, 500), logicResult.durationMs, logicResult.success);
+
+      if (logicParsed.verdict !== "approve") {
+        const logicBeforeCount = logicParsed.issues.length;
+        logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round);
+        logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
+      }
+    }
+
+    if (logicParsed.verdict === "approve") {
+      changedFiles.forEach((f) => logicApprovedFiles.add(f));
+    }
 
     logReviewRound(taskId, round, "logic", logicParsed.verdict, logicParsed.issues, diff);
 
@@ -321,8 +377,9 @@ export async function runReviewLoop(
   let toolsContext = "";
   console.log(`  Running tools advisor...`);
   try {
-    toolsContext = await runToolsAgent(config, repo, taskDescription, worktreePath);
-    logAgentRun(taskId, "tools", 0, taskDescription.slice(0, 500), toolsContext.slice(0, 500), 0, toolsContext.length > 0);
+    const rawContext = await runToolsAgent(config, repo, taskDescription, worktreePath);
+    toolsContext = rawContext.trim().toUpperCase().startsWith("NO_ADVICE_NEEDED") ? "" : rawContext;
+    logAgentRun(taskId, "tools", 0, taskDescription.slice(0, 500), rawContext.slice(0, 500), 0, rawContext.length > 0);
   } catch (err) {
     console.warn(`  Tools advisor failed, proceeding without recommendations: ${err}`);
   }
@@ -358,7 +415,8 @@ export async function runReviewLoop(
     const result = await runSubTaskReviewLoop(
       config, repo, taskId, worktreePath,
       subTask.description, taskDescription,
-      i, subTasks.length, toolsContext.trim()
+      i, subTasks.length, toolsContext.trim(),
+      subTask.files && subTask.files.length > 0 ? subTask.files : undefined
     );
 
     totalRounds += result.rounds;

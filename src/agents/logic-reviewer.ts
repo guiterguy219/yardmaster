@@ -15,6 +15,7 @@ export async function runLogicReviewer(
     prompt,
     systemPrompt: LOGIC_REVIEWER_SYSTEM_PROMPT,
     workingDir: worktreePath,
+    model: "opus",
     timeout: config.timeouts.reviewer,
   });
 }
