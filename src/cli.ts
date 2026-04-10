@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { Command } from "commander";
 import { executeTask } from "./task-runner.js";
+import { loadConfig, getRepo } from "./config.js";
 import { getRecentTasks } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { enqueueTask, getQueueContents, removeJob, changePriority, closeQueue } from "./queue/task-queue.js";
@@ -8,6 +9,7 @@ import { startWorker, stopWorker } from "./queue/task-worker.js";
 import { PRIORITY, PRIORITY_LABELS, parsePriority, type PriorityLevel } from "./queue/constants.js";
 import { scanReposForIssues } from "./issue-scanner.js";
 import { runDoctor } from "./doctor.js";
+import { onboardRepo } from "./onboarding.js";
 
 const program = new Command();
 
@@ -30,6 +32,36 @@ program
     console.log(`\nYardmaster — Task (P0 immediate)`);
     console.log(`  Repo: ${opts.repo}`);
     console.log(`  Task: ${taskDescription.slice(0, 100)}${taskDescription.length > 100 ? "..." : ""}\n`);
+
+    const config = loadConfig();
+    const repo = getRepo(config, opts.repo);
+
+    if (!repo.checkCommand) {
+      const onboarding = await onboardRepo(repo.localPath, repo.name);
+      const d = onboarding.detection;
+      console.log(`Onboarding: no checkCommand configured for "${repo.name}"`);
+      console.log(`  Language:        ${d.language}`);
+      if (d.packageManager) {
+        console.log(`  Package manager: ${d.packageManager}`);
+      }
+      console.log(`  Has CI:          ${d.hasCI ? "yes" : "no"}`);
+      console.log(`  Has Docker:      ${d.hasDocker ? "yes" : "no"}`);
+      console.log(`  Has CLAUDE.md:   ${d.hasClaude ? "yes" : "no"}`);
+      if (d.checkCommand) {
+        console.log(`  Inferred check:  ${d.checkCommand}`);
+      }
+      if (onboarding.suggestions.length > 0) {
+        console.log(`\nSuggestions:`);
+        for (const s of onboarding.suggestions) {
+          console.log(`  - ${s}`);
+        }
+      }
+      if (d.checkCommand) {
+        console.log(`\nTo persist, add to repos.json for "${repo.name}":`);
+        console.log(`  "checkCommand": "${d.checkCommand}"`);
+      }
+      console.log();
+    }
 
     const result = await executeTask(opts.repo, taskDescription);
 
