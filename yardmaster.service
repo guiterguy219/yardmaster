@@ -11,6 +11,8 @@ Restart=on-failure
 RestartSec=10
 Environment=NODE_ENV=production
 Environment=NO_COLOR=1
+Environment=PATH=/home/jared/.local/bin:/home/jared/.nvm/versions/node/v22.22.2/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/jared
 
 [Install]
 WantedBy=multi-user.target
