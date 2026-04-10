@@ -1,8 +1,8 @@
-import { loadConfig, getRepo, type YardmasterConfig, type RepoConfig } from "./config.js";
-import { createTask, updateTask, logAgentRun } from "./db.js";
+import { loadConfig, getRepo } from "./config.js";
+import { createTask, updateTask } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
-import { runCoder } from "./agents/coder.js";
+import { runReviewLoop } from "./review-loop.js";
 import { commitAndPush } from "./agents/git-agent.js";
 
 export interface TaskResult {
@@ -48,21 +48,15 @@ export async function executeTask(
     console.log(`  Worktree: ${worktree.path}`);
     console.log(`  Branch: ${worktree.branch}`);
 
-    // Run coder agent
-    console.log(`  Running coder agent...`);
-    const coderResult = await runCoder(config, repo, description, worktree.path);
+    // Run review loop (coder + reviewers)
+    console.log(`  Running review loop...`);
+    const loopResult = await runReviewLoop(config, repo, taskId, worktree.path, description);
 
-    logAgentRun(
-      taskId,
-      "coder",
-      1,
-      description,
-      coderResult.result.slice(0, 500),
-      coderResult.durationMs,
-      coderResult.success
+    console.log(
+      `  Review loop complete: ${loopResult.finalVerdict} after ${loopResult.rounds} round(s)`
     );
 
-    if (!coderResult.success) {
+    if (!loopResult.converged) {
       // Try to save WIP work
       if (worktree) {
         const wip = saveWipWork(worktree, description);
@@ -73,17 +67,15 @@ export async function executeTask(
 
       updateTask(taskId, {
         status: "failed",
-        error: coderResult.error ?? "Coder agent failed",
+        error: `Review loop ended without convergence: ${loopResult.finalVerdict}`,
       });
       return {
         taskId,
         success: false,
         prUrl: null,
-        error: coderResult.error,
+        error: `Review loop ended without convergence: ${loopResult.finalVerdict}`,
       };
     }
-
-    console.log(`  Coder completed in ${(coderResult.durationMs / 1000).toFixed(1)}s`);
 
     // Commit, push, and create PR
     console.log(`  Creating PR...`);
