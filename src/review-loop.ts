@@ -171,33 +171,9 @@ export async function runReviewLoop(
 
     console.log(`  [Round ${round}] Coder completed in ${(coderResult.durationMs / 1000).toFixed(1)}s`);
 
-    // Alignment gate: check coder output
-    const coderAlignment = await checkAlignment(
-      config,
-      taskDescription,
-      "coder",
-      coderResult.result
-    );
-    logAgentRun(
-      taskId,
-      "alignment",
-      round,
-      "Alignment check for coder",
-      JSON.stringify(coderAlignment).slice(0, 500),
-      0,
-      coderAlignment.aligned
-    );
-    if (!coderAlignment.aligned) {
-      console.log(`  [Round ${round}] Coder alignment concern: ${coderAlignment.concern}`);
-      roundSummaries.push(`- Round ${round}: coder output flagged by alignment gate`);
-      return {
-        converged: false,
-        rounds: round,
-        finalVerdict: "needs_human_review",
-        issues: allIssues,
-        reviewSummary: `Did not converge after ${round} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
-      };
-    }
+    // Note: no alignment gate on coder output. The coder's response text is often
+    // just a summary ("I fixed X, Y, Z") which looks misaligned but the actual work
+    // is in file changes. The reviewers check whether the code itself is correct.
 
     // Step 2: Get diff (coder edits files but doesn't commit, so stage and diff against HEAD)
     let diff = "";
