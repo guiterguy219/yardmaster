@@ -14,6 +14,7 @@ export interface ReviewLoopResult {
   rounds: number;
   finalVerdict: "approved" | "needs_human_review";
   issues: any[];
+  reviewSummary: string;
 }
 
 interface ReviewIssue {
@@ -128,6 +129,7 @@ export async function runReviewLoop(
   const MAX_ROUNDS = 4;
   let currentPrompt = taskDescription;
   let allIssues: ReviewIssue[] = [];
+  const roundSummaries: string[] = [];
 
   // Run tools agent before first coder invocation
   console.log(`  [Round 1] Running tools advisor...`);
@@ -157,11 +159,13 @@ export async function runReviewLoop(
     );
 
     if (!coderResult.success || !coderResult.result) {
+      roundSummaries.push(`- Round ${round}: coder failed`);
       return {
         converged: false,
         rounds: round,
         finalVerdict: "needs_human_review",
         issues: allIssues,
+        reviewSummary: `Did not converge after ${round} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
       };
     }
 
@@ -185,11 +189,13 @@ export async function runReviewLoop(
     );
     if (!coderAlignment.aligned) {
       console.log(`  [Round ${round}] Coder alignment concern: ${coderAlignment.concern}`);
+      roundSummaries.push(`- Round ${round}: coder output flagged by alignment gate`);
       return {
         converged: false,
         rounds: round,
         finalVerdict: "needs_human_review",
         issues: allIssues,
+        reviewSummary: `Did not converge after ${round} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
       };
     }
 
@@ -222,7 +228,9 @@ export async function runReviewLoop(
     );
 
     // Alignment gate: filter style issues
+    const styleBeforeCount = styleParsed.issues.length;
     styleParsed = await applyAlignmentFilter(config, styleParsed, "style", taskDescription, taskId, round);
+    const styleFilteredCount = styleBeforeCount - styleParsed.issues.length;
 
     logReviewRound(taskId, round, "style", styleParsed.verdict, styleParsed.issues, diff);
 
@@ -242,17 +250,28 @@ export async function runReviewLoop(
     );
 
     // Alignment gate: filter logic issues
+    const logicBeforeCount = logicParsed.issues.length;
     logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", taskDescription, taskId, round);
+    const logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
 
     logReviewRound(taskId, round, "logic", logicParsed.verdict, logicParsed.issues, diff);
 
+    // Build per-round summary line
+    const filterParts: string[] = [];
+    if (styleFilteredCount > 0) filterParts.push(`style alignment filtered ${styleFilteredCount}`);
+    if (logicFilteredCount > 0) filterParts.push(`logic alignment filtered ${logicFilteredCount}`);
+    const filterNote = filterParts.length > 0 ? ` (${filterParts.join(", ")})` : "";
+    const roundBase = `- Round ${round}: style=${styleParsed.verdict} (${styleParsed.issues.length} issues), logic=${logicParsed.verdict} (${logicParsed.issues.length} issues)${filterNote}`;
+
     // Step 5: Both approve?
     if (styleParsed.verdict === "approve" && logicParsed.verdict === "approve") {
+      roundSummaries.push(`${roundBase} — converged`);
       return {
         converged: true,
         rounds: round,
         finalVerdict: "approved",
         issues: [],
+        reviewSummary: `Converged after ${round} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
       };
     }
 
@@ -263,23 +282,29 @@ export async function runReviewLoop(
     const oscillation = detectOscillation(taskId, diff);
     if (oscillation.detected) {
       console.log(`  Oscillation detected: ${oscillation.reason}`);
+      roundSummaries.push(`${roundBase} — oscillation detected`);
       return {
         converged: false,
         rounds: round,
         finalVerdict: "needs_human_review",
         issues: allIssues,
+        reviewSummary: `Did not converge after ${round} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
       };
     }
 
     // Check round limit
     if (round >= MAX_ROUNDS) {
+      roundSummaries.push(roundBase);
       return {
         converged: false,
         rounds: round,
         finalVerdict: "needs_human_review",
         issues: allIssues,
+        reviewSummary: `Did not converge after ${round} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
       };
     }
+
+    roundSummaries.push(roundBase);
 
     // Step 7: Build feedback prompt and continue
     const filteredIssues = filterIssuesBySeverity(allIssues, round);
@@ -294,5 +319,6 @@ export async function runReviewLoop(
     rounds: MAX_ROUNDS,
     finalVerdict: "needs_human_review",
     issues: allIssues,
+    reviewSummary: `Did not converge after ${MAX_ROUNDS} of ${MAX_ROUNDS} rounds\n\n${roundSummaries.join("\n")}`,
   };
 }
