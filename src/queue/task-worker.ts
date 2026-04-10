@@ -26,7 +26,7 @@ export function startWorker(): Worker {
       console.log(`  Task: ${description.slice(0, 100)}${description.length > 100 ? "..." : ""}`);
       if (issueRef) console.log(`  Issue: ${issueRef}`);
 
-      const result = await executeTask(repo, description);
+      const result = await executeTask(repo, description, issueRef);
 
       if (result.success) {
         console.log(`[Worker] Job ${job.id} completed. PR: ${result.prUrl ?? "none"}`);

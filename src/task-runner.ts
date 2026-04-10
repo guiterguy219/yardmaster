@@ -8,6 +8,7 @@ import { runTestLoop } from "./test-loop.js";
 import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
+import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 
 export interface TaskResult {
   taskId: string;
@@ -18,7 +19,8 @@ export interface TaskResult {
 
 export async function executeTask(
   repoName: string,
-  description: string
+  description: string,
+  issueRef?: string
 ): Promise<TaskResult> {
   const config = loadConfig();
   const repo = getRepo(config, repoName);
@@ -39,9 +41,15 @@ export async function executeTask(
 
   // Create task record
   const taskId = createTask(repoName, description);
+  if (issueRef) {
+    updateTask(taskId, { issue_ref: issueRef });
+  }
   updateTask(taskId, { status: "running" });
   updatePipelineStage(taskId, "created", process.pid);
   console.log(`  Task ${taskId} created`);
+  if (issueRef) {
+    notifyStarted(issueRef, taskId);
+  }
 
   let worktree: Worktree | null = null;
 
@@ -77,6 +85,7 @@ export async function executeTask(
 
       const failError = `Review loop ended without convergence: ${loopResult.finalVerdict}`;
       updateTask(taskId, { status: "failed", error: failError });
+      if (issueRef) notifyFailed(issueRef, taskId, failError);
 
       // Analyze failure pattern for self-improvement
       try {
@@ -99,7 +108,9 @@ export async function executeTask(
       } catch (err) {
         const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
         console.log(`  Check FAILED`);
-        updateTask(taskId, { status: "failed", error: `Check failed: ${checkError.slice(0, 200)}` });
+        const checkFailError = `Check failed: ${checkError.slice(0, 200)}`;
+        updateTask(taskId, { status: "failed", error: checkFailError });
+        if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
         return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
       }
     }
@@ -109,6 +120,7 @@ export async function executeTask(
     if (!testResult.passed) {
       const testError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
       updateTask(taskId, { status: "failed", error: testError });
+      if (issueRef) notifyFailed(issueRef, taskId, testError);
       return { taskId, success: false, prUrl: null, error: testError };
     }
     updatePipelineStage(taskId, "test_complete");
@@ -123,6 +135,7 @@ export async function executeTask(
     if (browserResult.ran && !browserResult.passed) {
       const browserError = `Browser validation failed: ${browserResult.output.slice(0, 200)}`;
       updateTask(taskId, { status: "failed", error: browserError });
+      if (issueRef) notifyFailed(issueRef, taskId, browserError);
       return { taskId, success: false, prUrl: null, error: browserError };
     }
     if (!browserResult.ran) {
@@ -142,6 +155,7 @@ export async function executeTask(
     if (gitResult.prUrl) {
       updatePipelineStage(taskId, "pr_created");
       updateTask(taskId, { status: "completed", pr_url: gitResult.prUrl });
+      if (issueRef) notifyPrCreated(issueRef, taskId, gitResult.prUrl);
       console.log(`  PR: ${gitResult.prUrl}`);
       return { taskId, success: true, prUrl: gitResult.prUrl };
     }
@@ -151,6 +165,7 @@ export async function executeTask(
         status: gitResult.committed ? "partial" : "failed",
         error: gitResult.error,
       });
+      if (issueRef) notifyFailed(issueRef, taskId, gitResult.error);
       return { taskId, success: false, prUrl: null, error: gitResult.error };
     }
 
@@ -168,6 +183,7 @@ export async function executeTask(
     }
 
     updateTask(taskId, { status: "failed", error });
+    if (issueRef) notifyFailed(issueRef, taskId, error);
     return { taskId, success: false, prUrl: null, error };
   } finally {
     // Clean up worktree

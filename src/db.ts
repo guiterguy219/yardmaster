@@ -63,6 +63,9 @@ function migrate(db: Database.Database): void {
   if (!colNames.has("worker_pid")) {
     db.exec("ALTER TABLE tasks ADD COLUMN worker_pid INTEGER");
   }
+  if (!colNames.has("issue_ref")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN issue_ref TEXT");
+  }
 }
 
 export function createTask(repo: string, description: string): string {
@@ -76,7 +79,7 @@ export function createTask(repo: string, description: string): string {
 
 export function updateTask(
   id: string,
-  fields: Partial<{ status: TaskStatus; branch: string; pr_url: string; error: string }>
+  fields: Partial<{ status: TaskStatus; branch: string; pr_url: string; error: string; issue_ref: string }>
 ): void {
   const db = getDb();
   const sets: string[] = ["updated_at = datetime('now')"];
@@ -107,6 +110,7 @@ export type TaskRow = {
   error: string | null;
   pipeline_stage: string | null;
   worker_pid: number | null;
+  issue_ref: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -4,6 +4,7 @@ import { getDb } from "./db.js";
 import { runAgent } from "./agent-runner.js";
 import { enqueueTask } from "./queue/task-queue.js";
 import { PRIORITY, type PriorityLevel } from "./queue/constants.js";
+import { notifyQueued } from "./issue-lifecycle.js";
 
 export interface ScanResult {
   queued: number;
@@ -120,6 +121,7 @@ export async function scanReposForIssues(config?: YardmasterConfig): Promise<Sca
           issueRef
         );
         recordQueuedIssue(issueRef, jobId);
+        notifyQueued(issueRef, jobId);
         result.queued++;
         console.log(`  Queued: ${issueRef} → ${repo.name} [P${priority}]`);
       } catch (err) {

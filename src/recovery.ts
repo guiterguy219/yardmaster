@@ -12,6 +12,7 @@ import {
 } from "./db.js";
 import { runTestLoop } from "./test-loop.js";
 import { commitAndPush } from "./agents/git-agent.js";
+import { notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 
 const YARDMASTER_CMDLINE_MARKERS = ["yardmaster", "claude"];
 
@@ -112,6 +113,7 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
     }
 
     const stage = task.pipeline_stage;
+    const issueRef = task.issue_ref;
     console.log(`  Recovering ${task.id} (stage: ${stage ?? "unknown"}, repo: ${task.repo})`);
 
     const worktree = {
@@ -151,6 +153,7 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
           status: "failed",
           error: "Interrupted before review was complete — cannot resume",
         });
+        if (issueRef) notifyFailed(issueRef, task.id, "Interrupted before review was complete — cannot resume");
         failed++;
         continue;
       }
@@ -177,6 +180,7 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
             status: "failed",
             error: `Recovery check failed: ${checkError.slice(0, 200)}`,
           });
+          if (issueRef) notifyFailed(issueRef, task.id, `Recovery check failed: ${checkError.slice(0, 200)}`);
           failed++;
           continue;
         }
@@ -187,6 +191,7 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
         if (!testResult.passed) {
           const testError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
           updateTask(task.id, { status: "failed", error: testError });
+          if (issueRef) notifyFailed(issueRef, task.id, testError);
           failed++;
           continue;
         }
@@ -203,6 +208,7 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
         if (gitResult.prUrl) {
           updatePipelineStage(task.id, "pr_created");
           updateTask(task.id, { status: "completed", pr_url: gitResult.prUrl });
+          if (issueRef) notifyPrCreated(issueRef, task.id, gitResult.prUrl);
           console.log(`  Recovered ${task.id}: PR ${gitResult.prUrl}`);
           recovered++;
         } else if (gitResult.error) {
@@ -210,6 +216,7 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
             status: gitResult.committed ? "partial" : "failed",
             error: gitResult.error,
           });
+          if (issueRef) notifyFailed(issueRef, task.id, gitResult.error);
           failed++;
         } else {
           if (!gitResult.committed) {
@@ -243,11 +250,13 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
           ).trim();
           updatePipelineStage(task.id, "pr_created");
           updateTask(task.id, { status: "completed", pr_url: prUrl });
+          if (issueRef) notifyPrCreated(issueRef, task.id, prUrl);
           console.log(`  Recovered ${task.id}: PR ${prUrl}`);
           recovered++;
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           updateTask(task.id, { status: "partial", error: `PR creation failed: ${error}` });
+          if (issueRef) notifyFailed(issueRef, task.id, `PR creation failed: ${error}`);
           failed++;
         }
       } else if (stage === "pr_created") {
@@ -261,12 +270,14 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
           status: "failed",
           error: `Unknown or unresumable pipeline stage: ${stage}`,
         });
+        if (issueRef) notifyFailed(issueRef, task.id, `Unknown or unresumable pipeline stage: ${stage}`);
         failed++;
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       console.log(`  Recovery failed for ${task.id}: ${error}`);
       updateTask(task.id, { status: "failed", error: `Recovery failed: ${error}` });
+      if (issueRef) notifyFailed(issueRef, task.id, `Recovery failed: ${error}`);
       failed++;
     }
   }
