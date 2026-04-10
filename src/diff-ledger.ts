@@ -56,3 +56,24 @@ export function getReviewHistory(taskId: string): Array<{
     created_at: string;
   }>;
 }
+
+/**
+ * Lightweight query that excludes diff_text to avoid loading large diffs into memory.
+ * Use this when you only need round metadata and issues (e.g., building prior rounds context).
+ */
+export function getReviewSummaries(taskId: string): Array<{
+  round: number;
+  agent: string;
+  verdict: string;
+  issues_json: string;
+}> {
+  ensureTable();
+  return getDb()
+    .prepare("SELECT round, agent, verdict, issues_json FROM review_rounds WHERE task_id = ? ORDER BY round, agent")
+    .all(taskId) as Array<{
+    round: number;
+    agent: string;
+    verdict: string;
+    issues_json: string;
+  }>;
+}

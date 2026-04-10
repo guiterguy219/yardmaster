@@ -1,7 +1,7 @@
 import { execSync, execFileSync } from "node:child_process";
 import type { YardmasterConfig, RepoConfig } from "./config.js";
 import { logAgentRun } from "./db.js";
-import { logReviewRound, getReviewHistory } from "./diff-ledger.js";
+import { logReviewRound, getReviewHistory, getReviewSummaries } from "./diff-ledger.js";
 import { parseAgentJson } from "./utils/parse-json.js";
 import { detectOscillation } from "./oscillation.js";
 import { runCoder } from "./agents/coder.js";
@@ -122,7 +122,7 @@ Fix these issues in the existing code. Do not rewrite everything from scratch â€
 function buildPriorRoundsContext(taskId: string, currentRound: number): string {
   if (currentRound <= 1) return "";
 
-  const history = getReviewHistory(taskId);
+  const history = getReviewSummaries(taskId);
   const priorEntries = history.filter((h) => h.round < currentRound);
 
   if (priorEntries.length === 0) return "";
@@ -356,6 +356,10 @@ async function runSubTaskReviewLoop(
     }
 
     roundSummaries.push(roundBase);
+
+    // Release the diff string to reduce peak memory across rounds.
+    // The diff is already persisted to SQLite via logReviewRound above.
+    diff = "";
 
     // Build feedback and continue
     const filteredIssues = filterIssuesBySeverity(allIssues, round);
