@@ -8,7 +8,8 @@ Rules:
 - If a new dependency is genuinely needed, recommend specific packages with current, accurate names.
 - Keep recommendations concise — a short list, not an essay.
 - Focus on actionable advice the coder can use immediately.
-- Output format: plain text recommendations, not JSON.`;
+- Output format: plain text recommendations, not JSON.
+- If no special tooling or library recommendations are needed for this task (e.g., the task uses only built-in language features or the project already has everything needed and there are no non-obvious patterns to highlight), respond with exactly: NO_ADVICE_NEEDED`;
 
 export function buildToolsAgentPrompt(
   repo: RepoConfig,

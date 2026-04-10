@@ -15,7 +15,7 @@ export async function runToolsAgent(
     systemPrompt: TOOLS_AGENT_SYSTEM_PROMPT,
     workingDir: worktreePath,
     allowedTools: ["Read", "Glob", "Grep"],
-    model: "sonnet",
+    model: "haiku",
     timeout: 90_000,
   });
 

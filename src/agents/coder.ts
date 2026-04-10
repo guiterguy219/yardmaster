@@ -14,6 +14,7 @@ export async function runCoder(
     prompt,
     systemPrompt: CODER_SYSTEM_PROMPT,
     workingDir: worktreePath,
+    model: "opus",
     timeout: config.timeouts.coder,
   });
 }
