@@ -58,8 +58,12 @@ export function promptForSecret(key: string, description: string): Promise<strin
   });
 }
 
-function toRaw(svc: unknown): Record<string, unknown> {
-  return svc as Record<string, unknown>;
+async function resolveSecret(repoName: string, key: string, description: string): Promise<string> {
+  const existing = getSecret(repoName, key);
+  if (existing) return existing;
+  const value = await promptForSecret(key, description);
+  setSecret(repoName, key, value);
+  return value;
 }
 
 export async function resolveSecrets(
@@ -69,41 +73,65 @@ export async function resolveSecrets(
   const resolved: Record<string, string> = {};
 
   for (const [name, svc] of Object.entries(config.services)) {
-    const svcType = svc.type;
-
-    if (name === "neon" || (svcType === "database" && svc.url?.includes("neon"))) {
-      const existing = getSecret(repoName, "DB_URL");
-      if (existing) {
-        resolved["DB_URL"] = existing;
-      } else {
-        const value = await promptForSecret("DB_URL", `Neon database connection string for ${repoName}`);
-        setSecret(repoName, "DB_URL", value);
-        resolved["DB_URL"] = value;
+    switch (svc.type) {
+      case "neon": {
+        // Neon branches need connection strings — prompt and cache
+        const secretKey = name === "keycloak-database" ? "KC_DB_JDBC_URL" : "DB_URL";
+        const description = name === "keycloak-database"
+          ? `Neon Keycloak database JDBC URL for ${repoName} (jdbc:postgresql://...)`
+          : `Neon database connection string for ${repoName} (postgresql://...)`;
+        resolved[secretKey] = await resolveSecret(repoName, secretKey, description);
+        break;
       }
-    } else if (name === "docker-redis" || svcType === "cache") {
-      resolved["REDIS_HOST"] = "localhost";
-      const raw = toRaw(svc);
-      const redisPorts = raw["ports"] as Record<string, number> | undefined;
-      const redisPort = redisPorts?.[6379] ?? 6379;
-      resolved["REDIS_PORT"] = String(redisPort);
-    } else if ((name === "docker-postgres" || svcType === "database") && !svc.url?.includes("neon")) {
-      const raw = toRaw(svc);
-      const env = raw["env"] as Record<string, string> | undefined;
-      const pgPorts = raw["ports"] as Record<string, number> | undefined;
-      const user = env?.["POSTGRES_USER"] ?? "postgres";
-      const password = env?.["POSTGRES_PASSWORD"] ?? "postgres";
-      const db = env?.["POSTGRES_DB"] ?? "app";
-      const port = pgPorts?.[5432] ?? 5432;
-      resolved["DB_URL"] = `postgresql://${user}:${password}@localhost:${port}/${db}`;
-    } else if (name === "docker-keycloak" || svcType === "auth") {
-      const raw = toRaw(svc);
-      const kcPorts = raw["ports"] as Record<string, number> | undefined;
-      const port = kcPorts?.[8080] ?? 8080;
-      const baseUrl = `http://localhost:${port}`;
-      resolved["KEYCLOAK_URL"] = baseUrl;
-      resolved["AUTH_ISSUER"] = `${baseUrl}/realms/app`;
-      resolved["AUTH_JWKS_URI"] = `${baseUrl}/realms/app/protocol/openid-connect/certs`;
+      case "docker-redis": {
+        resolved["REDIS_HOST"] = "localhost";
+        const redisPort = svc.ports?.[6379] ?? 6379;
+        resolved["REDIS_PORT"] = String(redisPort);
+        break;
+      }
+      case "docker-postgres": {
+        const user = svc.env?.["POSTGRES_USER"] ?? "postgres";
+        const password = svc.env?.["POSTGRES_PASSWORD"] ?? "postgres";
+        const db = svc.env?.["POSTGRES_DB"] ?? "app";
+        const port = svc.ports?.[5432] ?? 5432;
+        resolved["DB_URL"] = `postgresql://${user}:${password}@localhost:${port}/${db}`;
+        break;
+      }
+      case "docker-keycloak": {
+        const port = svc.ports?.[8080] ?? 8080;
+        const baseUrl = `http://localhost:${port}`;
+        resolved["KEYCLOAK_URL"] = baseUrl;
+        break;
+      }
     }
+  }
+
+  // Auth-specific secrets
+  if (config.auth.strategy === "keycloak") {
+    const realm = config.auth.realm ?? "threatzero";
+    const kcUrl = resolved["KEYCLOAK_URL"] ?? "http://localhost:18080";
+    resolved["AUTH_ISSUER"] = `${kcUrl}/realms/${realm}`;
+    resolved["AUTH_JWKS_URI"] = `${kcUrl}/realms/${realm}/protocol/openid-connect/certs`;
+    resolved["AUTH_AUDIENCE"] = config.auth.clientId ?? "threatzero-api";
+    resolved["KEYCLOAK_ADMIN_CLIENT_BASE_URL"] = kcUrl;
+
+    // Prompt for secrets that can't be derived
+    resolved["KEYCLOAK_ADMIN_CLIENT_CLIENT_SECRET"] = await resolveSecret(
+      repoName, "KC_CLIENT_SECRET", `Keycloak client secret for ${config.auth.clientId ?? "threatzero-api"}`
+    );
+    resolved["KC_TEST_USERNAME"] = await resolveSecret(repoName, "KC_TEST_USERNAME", "Keycloak test user username");
+    resolved["KC_TEST_PASSWORD"] = await resolveSecret(repoName, "KC_TEST_PASSWORD", "Keycloak test user password");
+
+    // Group IDs — these are in the Neon branch KC database
+    resolved["KEYCLOAK_PARENT_ORGANIZATIONS_GROUP_ID"] = await resolveSecret(
+      repoName, "KC_PARENT_ORGS_GROUP_ID", "Keycloak parent organizations group ID (UUID)"
+    );
+    resolved["KEYCLOAK_PARENT_AUDIENCES_GROUP_ID"] = await resolveSecret(
+      repoName, "KC_PARENT_AUDIENCES_GROUP_ID", "Keycloak parent audiences group ID (UUID)"
+    );
+    resolved["KEYCLOAK_PARENT_ROLE_GROUPS_GROUP_ID"] = await resolveSecret(
+      repoName, "KC_PARENT_ROLE_GROUPS_GROUP_ID", "Keycloak parent role groups group ID (UUID)"
+    );
   }
 
   return resolved;
@@ -111,29 +139,51 @@ export async function resolveSecrets(
 
 export function buildIntegrationEnv(
   _repoName: string,
-  _config: IntegrationConfig,
+  config: IntegrationConfig,
   resolvedSecrets: Record<string, string>
 ): Record<string, string> {
+  const realm = config.auth.realm ?? "threatzero";
+  const kcUrl = resolvedSecrets["KEYCLOAK_URL"] ?? "http://localhost:18080";
+
+  // Dummy values for services not under test — required by Zod config validation
   const baseEnv: Record<string, string> = {
     NODE_ENV: "test",
-    APP_HOST: "localhost",
-    AUTH_ISSUER: "http://localhost:8080/realms/app",
-    AUTH_AUDIENCE: "test-client",
-    AUTH_JWKS_URI: "http://localhost:8080/realms/app/protocol/openid-connect/certs",
-    JWT_SECRET: "test-jwt-secret-for-integration",
-    API_KEY: "test-api-key",
-    SESSION_SECRET: "test-session-secret",
-    LOG_LEVEL: "error",
+    APP_HOST: "http://localhost:3000",
+    API_HOST: "http://localhost:3000",
+    // Auth
+    AUTH_ISSUER: `${kcUrl}/realms/${realm}`,
+    AUTH_AUDIENCE: config.auth.clientId ?? "threatzero-api",
+    AUTH_JWKS_URI: `${kcUrl}/realms/${realm}/protocol/openid-connect/certs`,
+    // Keycloak admin
+    KEYCLOAK_ADMIN_CLIENT_BASE_URL: kcUrl,
+    KEYCLOAK_ADMIN_CLIENT_CLIENT_ID: "admin-cli",
+    KEYCLOAK_ADMIN_CLIENT_CLIENT_SECRET: "dummy-secret",
+    KEYCLOAK_ADMIN_CLIENT_ADMIN_REALM: "master",
+    KEYCLOAK_ADMIN_CLIENT_DEFAULT_REALM: realm,
+    KEYCLOAK_PARENT_ORGANIZATIONS_GROUP_ID: "00000000-0000-0000-0000-000000000001",
+    KEYCLOAK_PARENT_AUDIENCES_GROUP_ID: "00000000-0000-0000-0000-000000000002",
+    KEYCLOAK_PARENT_ROLE_GROUPS_GROUP_ID: "00000000-0000-0000-0000-000000000003",
+    // Redis
     REDIS_HOST: "localhost",
     REDIS_PORT: "6379",
+    REDIS_TLS: "false",
+    // Database
     DB_URL: "postgresql://postgres:postgres@localhost:5432/app",
-    SMTP_HOST: "localhost",
-    SMTP_PORT: "1025",
-    S3_ENDPOINT: "http://localhost:9000",
-    S3_BUCKET: "test-bucket",
-    S3_ACCESS_KEY: "minioadmin",
-    S3_SECRET_KEY: "minioadmin",
+    DB_SSL_ENABLED: "false",
+    DB_LOGGING: "false",
+    // AWS (not used in integration tests — dummy values)
+    AWS_REGION: "us-west-2",
+    AWS_S3_BUCKETS_UPLOADED_MEDIA_NAME: "test-bucket",
+    AWS_S3_BUCKETS_APPFILES_NAME: "test-appfiles",
+    AWS_CLOUDFRONT_DISTRIBUTIONS_APPFILES_DOMAIN: "test.cloudfront.net",
+    AWS_CLOUDFRONT_DISTRIBUTIONS_APPFILES_KEYPAIRID: "TESTKEYPAIRID",
+    AWS_CLOUDFRONT_DISTRIBUTIONS_APPFILES_PRIVATEKEY: "dummy-private-key",
+    // Vimeo (not used)
+    VIMEO_ACCESS_TOKEN: "dummy-vimeo-token",
+    // Notifications (not used — no real emails!)
+    NOTIFICATIONS_SMS_ORIGINATION_PHONE_NUMBER: "+10000000000",
   };
 
+  // Real secrets override dummies
   return { ...baseEnv, ...resolvedSecrets };
 }

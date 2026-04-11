@@ -18,7 +18,8 @@ function makeYaml(overrides: Record<string, unknown> = {}): string {
   const base: Record<string, unknown> = {
     enabled: true,
     services: {
-      api: { type: "api", url: "http://localhost:3000" },
+      database: { type: "neon" },
+      redis: { type: "docker-redis", image: "redis:7-alpine", ports: { 6379: 16379 } },
     },
     auth: { strategy: "mock-jwt" },
     testCommand: "npm test",
@@ -97,7 +98,7 @@ describe("loadIntegrationConfig — valid config", () => {
   });
 
   it("parses a minimal valid config", () => {
-    mockReadFileSync.mockReturnValue(makeYaml() as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(makeYaml() as any);
     const cfg = loadIntegrationConfig("my-repo");
     expect(cfg).not.toBeNull();
     expect(cfg!.enabled).toBe(true);
@@ -106,18 +107,19 @@ describe("loadIntegrationConfig — valid config", () => {
   });
 
   it("parses services correctly", () => {
-    mockReadFileSync.mockReturnValue(makeYaml() as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(makeYaml() as any);
     const cfg = loadIntegrationConfig("my-repo");
-    expect(cfg!.services).toHaveProperty("api");
-    expect(cfg!.services["api"].type).toBe("api");
-    expect(cfg!.services["api"].url).toBe("http://localhost:3000");
+    expect(cfg!.services).toHaveProperty("database");
+    expect(cfg!.services["database"].type).toBe("neon");
+    expect(cfg!.services).toHaveProperty("redis");
+    expect(cfg!.services["redis"].type).toBe("docker-redis");
   });
 
   it("uses auth strategy from YAML", () => {
-    const yaml = makeYaml({ auth: { strategy: "api-key", clientId: "my-client" } });
-    mockReadFileSync.mockReturnValue(yaml as unknown as Buffer);
+    const yaml = makeYaml({ auth: { strategy: "keycloak", clientId: "my-client" } });
+    mockReadFileSync.mockReturnValue(yaml as any);
     const cfg = loadIntegrationConfig("my-repo");
-    expect(cfg!.auth.strategy).toBe("api-key");
+    expect(cfg!.auth.strategy).toBe("keycloak");
     expect(cfg!.auth.clientId).toBe("my-client");
   });
 
@@ -131,7 +133,7 @@ describe("loadIntegrationConfig — valid config", () => {
       "    url: http://localhost:3000",
       "testCommand: npm test",
     ].join("\n");
-    mockReadFileSync.mockReturnValue(noAuthYaml as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(noAuthYaml as any);
     const cfg = loadIntegrationConfig("my-repo");
     expect(cfg!.auth.strategy).toBe("mock-jwt");
   });
@@ -145,19 +147,19 @@ describe("loadIntegrationConfig — valid config", () => {
       "    url: http://localhost:3000",
       "testCommand: npm test",
     ].join("\n");
-    mockReadFileSync.mockReturnValue(noTimeoutYaml as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(noTimeoutYaml as any);
     const cfg = loadIntegrationConfig("my-repo");
     expect(cfg!.testTimeout).toBe(600_000);
   });
 
   it("uses explicit testTimeout when provided", () => {
-    mockReadFileSync.mockReturnValue(makeYaml({ testTimeout: 120000 }) as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(makeYaml({ testTimeout: 120000 }) as any);
     const cfg = loadIntegrationConfig("my-repo");
     expect(cfg!.testTimeout).toBe(120000);
   });
 
   it("parses enabled: false correctly", () => {
-    mockReadFileSync.mockReturnValue(makeYaml({ enabled: false }) as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(makeYaml({ enabled: false }) as any);
     const cfg = loadIntegrationConfig("my-repo");
     expect(cfg!.enabled).toBe(false);
   });
@@ -181,19 +183,19 @@ describe("loadIntegrationConfig — validation errors", () => {
       "    url: http://localhost:3000",
       "testCommand: npm test",
     ].join("\n");
-    mockReadFileSync.mockReturnValue(bad as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(bad as any);
     expect(() => loadIntegrationConfig("bad-repo")).toThrow(/enabled.*boolean/i);
   });
 
   it("throws when 'services' is missing", () => {
     const bad = ["enabled: true", "testCommand: npm test"].join("\n");
-    mockReadFileSync.mockReturnValue(bad as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(bad as any);
     expect(() => loadIntegrationConfig("bad-repo")).toThrow(/services.*object/i);
   });
 
   it("throws when 'services' is an array instead of an object", () => {
     const bad = ["enabled: true", "services:", "  - foo", "testCommand: npm test"].join("\n");
-    mockReadFileSync.mockReturnValue(bad as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(bad as any);
     expect(() => loadIntegrationConfig("bad-repo")).toThrow(/services.*object/i);
   });
 
@@ -205,12 +207,12 @@ describe("loadIntegrationConfig — validation errors", () => {
       "    type: api",
       "    url: http://localhost:3000",
     ].join("\n");
-    mockReadFileSync.mockReturnValue(bad as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(bad as any);
     expect(() => loadIntegrationConfig("bad-repo")).toThrow(/testCommand.*string/i);
   });
 
   it("includes the repo name in validation error messages", () => {
-    mockReadFileSync.mockReturnValue("enabled: true\ntestCommand: npm test" as unknown as Buffer);
+    mockReadFileSync.mockReturnValue("enabled: true\ntestCommand: npm test" as any);
     expect(() => loadIntegrationConfig("special-repo")).toThrow(/special-repo/);
   });
 });

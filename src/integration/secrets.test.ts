@@ -49,14 +49,14 @@ describe("loadSecrets", () => {
   it("returns parsed JSON when the file exists and is valid", () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ DB_URL: "postgres://user:pass@host/db" }) as unknown as Buffer
+      JSON.stringify({ DB_URL: "postgres://user:pass@host/db" }) as any
     );
     expect(loadSecrets("my-repo")).toEqual({ DB_URL: "postgres://user:pass@host/db" });
   });
 
   it("returns an empty object when the file contains invalid JSON", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("not-json{{{" as unknown as Buffer);
+    mockReadFileSync.mockReturnValue("not-json{{{" as any);
     expect(loadSecrets("my-repo")).toEqual({});
   });
 });
@@ -96,14 +96,14 @@ describe("getSecret", () => {
   it("returns the value when the key exists", () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ MY_KEY: "secret-value" }) as unknown as Buffer
+      JSON.stringify({ MY_KEY: "secret-value" }) as any
     );
     expect(getSecret("my-repo", "MY_KEY")).toBe("secret-value");
   });
 
   it("returns null when the key is absent from the file", () => {
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(JSON.stringify({ OTHER_KEY: "x" }) as unknown as Buffer);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ OTHER_KEY: "x" }) as any);
     expect(getSecret("my-repo", "MY_KEY")).toBeNull();
   });
 });
@@ -126,7 +126,7 @@ describe("setSecret", () => {
   it("merges with existing secrets when updating", () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ EXISTING: "old-value" }) as unknown as Buffer
+      JSON.stringify({ EXISTING: "old-value" }) as any
     );
     setSecret("my-repo", "NEW_KEY", "new-value");
     const written = mockWriteFileSync.mock.calls[0][1] as string;
@@ -145,14 +145,15 @@ describe("buildIntegrationEnv", () => {
     expect(env["NODE_ENV"]).toBe("test");
   });
 
-  it("includes all expected base env keys", () => {
+  it("includes all expected base env keys for threatzero-api", () => {
     const env = buildIntegrationEnv("my-repo", makeConfig({}), {});
     const expectedKeys = [
-      "NODE_ENV", "APP_HOST", "AUTH_ISSUER", "AUTH_AUDIENCE", "AUTH_JWKS_URI",
-      "JWT_SECRET", "API_KEY", "SESSION_SECRET", "LOG_LEVEL",
-      "REDIS_HOST", "REDIS_PORT", "DB_URL",
-      "SMTP_HOST", "SMTP_PORT",
-      "S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY",
+      "NODE_ENV", "APP_HOST", "API_HOST",
+      "AUTH_ISSUER", "AUTH_AUDIENCE", "AUTH_JWKS_URI",
+      "KEYCLOAK_ADMIN_CLIENT_BASE_URL", "KEYCLOAK_ADMIN_CLIENT_CLIENT_ID",
+      "REDIS_HOST", "REDIS_PORT", "REDIS_TLS", "DB_URL", "DB_SSL_ENABLED",
+      "AWS_REGION", "AWS_S3_BUCKETS_UPLOADED_MEDIA_NAME",
+      "VIMEO_ACCESS_TOKEN", "NOTIFICATIONS_SMS_ORIGINATION_PHONE_NUMBER",
     ];
     for (const key of expectedKeys) {
       expect(env).toHaveProperty(key);
@@ -179,99 +180,65 @@ describe("buildIntegrationEnv", () => {
 
 describe("resolveSecrets — docker-postgres service", () => {
   it("builds DB_URL from default postgres env values", async () => {
-    mockExistsSync.mockReturnValue(false); // no secrets file
+    mockExistsSync.mockReturnValue(false);
     const config = makeConfig({
-      "docker-postgres": {
-        type: "database",
-        url: "postgresql://localhost/app",
+      database: {
+        type: "docker-postgres",
+        image: "postgres:16-alpine",
+        ports: { 5432: 15432 },
       },
     });
     const resolved = await resolveSecrets("my-repo", config);
-    expect(resolved["DB_URL"]).toBe("postgresql://postgres:postgres@localhost:5432/app");
+    expect(resolved["DB_URL"]).toBe("postgresql://postgres:postgres@localhost:15432/app");
   });
 
   it("builds DB_URL from custom postgres env block", async () => {
     mockExistsSync.mockReturnValue(false);
     const config = makeConfig({
-      "docker-postgres": Object.assign(
-        { type: "database" as const, url: "postgresql://localhost/mydb" },
-        { env: { POSTGRES_USER: "admin", POSTGRES_PASSWORD: "s3cr3t", POSTGRES_DB: "prod" } }
-      ),
+      database: {
+        type: "docker-postgres",
+        ports: { 5432: 15432 },
+        env: { POSTGRES_USER: "admin", POSTGRES_PASSWORD: "s3cr3t", POSTGRES_DB: "prod" },
+      },
     });
     const resolved = await resolveSecrets("my-repo", config);
-    expect(resolved["DB_URL"]).toBe("postgresql://admin:s3cr3t@localhost:5432/prod");
+    expect(resolved["DB_URL"]).toBe("postgresql://admin:s3cr3t@localhost:15432/prod");
   });
 });
 
 describe("resolveSecrets — docker-redis service", () => {
-  it("sets REDIS_HOST to localhost and REDIS_PORT to default 6379", async () => {
+  it("sets REDIS_HOST to localhost and REDIS_PORT from ports config", async () => {
     mockExistsSync.mockReturnValue(false);
     const config = makeConfig({
-      "docker-redis": { type: "cache", url: "redis://localhost:6379" },
+      redis: { type: "docker-redis", image: "redis:7-alpine", ports: { 6379: 16379 } },
     });
     const resolved = await resolveSecrets("my-repo", config);
     expect(resolved["REDIS_HOST"]).toBe("localhost");
-    expect(resolved["REDIS_PORT"]).toBe("6379");
+    expect(resolved["REDIS_PORT"]).toBe("16379");
   });
 });
 
 describe("resolveSecrets — docker-keycloak service", () => {
-  it("builds Keycloak-related env vars with default port 8080", async () => {
+  it("builds KEYCLOAK_URL from ports config", async () => {
     mockExistsSync.mockReturnValue(false);
     const config = makeConfig({
-      "docker-keycloak": { type: "auth", url: "http://localhost:8080" },
+      keycloak: { type: "docker-keycloak", ports: { 8080: 18080 } },
     });
     const resolved = await resolveSecrets("my-repo", config);
-    expect(resolved["KEYCLOAK_URL"]).toBe("http://localhost:8080");
-    expect(resolved["AUTH_ISSUER"]).toBe("http://localhost:8080/realms/app");
-    expect(resolved["AUTH_JWKS_URI"]).toBe(
-      "http://localhost:8080/realms/app/protocol/openid-connect/certs"
-    );
+    expect(resolved["KEYCLOAK_URL"]).toBe("http://localhost:18080");
   });
 });
 
 describe("resolveSecrets — neon service (existing secret)", () => {
   it("uses the cached DB_URL secret without prompting", async () => {
-    // First existsSync call (for the secrets file) returns true
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ DB_URL: "postgres://neon-host/db" }) as unknown as Buffer
+      JSON.stringify({ DB_URL: "postgres://neon-host/db" }) as any
     );
     const config = makeConfig({
-      neon: { type: "database", url: "https://neon.tech/xxx" },
+      database: { type: "neon" },
     });
     const resolved = await resolveSecrets("my-repo", config);
     expect(resolved["DB_URL"]).toBe("postgres://neon-host/db");
-  });
-});
-
-describe("resolveSecrets — service type fallbacks", () => {
-  it("treats a 'cache' type service as Redis", async () => {
-    mockExistsSync.mockReturnValue(false);
-    const config = makeConfig({
-      "my-cache": { type: "cache", url: "redis://localhost:6379" },
-    });
-    const resolved = await resolveSecrets("my-repo", config);
-    expect(resolved["REDIS_HOST"]).toBe("localhost");
-    expect(resolved["REDIS_PORT"]).toBeDefined();
-  });
-
-  it("treats an 'auth' type service as Keycloak", async () => {
-    mockExistsSync.mockReturnValue(false);
-    const config = makeConfig({
-      "my-auth": { type: "auth", url: "http://localhost:8080" },
-    });
-    const resolved = await resolveSecrets("my-repo", config);
-    expect(resolved["KEYCLOAK_URL"]).toBeDefined();
-    expect(resolved["AUTH_ISSUER"]).toBeDefined();
-  });
-
-  it("returns an empty resolved map for unknown service types", async () => {
-    mockExistsSync.mockReturnValue(false);
-    const config = makeConfig({
-      "my-email": { type: "email", url: "smtp://localhost:1025" },
-    });
-    const resolved = await resolveSecrets("my-repo", config);
-    expect(resolved).toEqual({});
   });
 });

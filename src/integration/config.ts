@@ -3,22 +3,27 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import yaml from "js-yaml";
 
-export type ServiceType = "api" | "database" | "queue" | "cache" | "storage" | "auth" | "email" | "search";
+export type ServiceType = "neon" | "docker-postgres" | "docker-redis" | "docker-keycloak";
 
-export type AuthStrategy = "mock-jwt" | "api-key" | "oauth" | "basic" | "none";
+export type AuthStrategy = "keycloak" | "mock-jwt";
 
 export interface IntegrationServiceConfig {
   type: ServiceType;
-  url: string;
-  healthCheck?: string;
-  required?: boolean;
+  image?: string;
+  ports?: Record<number, number>;  // containerPort -> hostPort
+  env?: Record<string, string>;
+  dependsOn?: string[];
+  build?: {
+    repo: string;
+    clonePath: string;
+  };
 }
 
 export interface IntegrationAuthConfig {
   strategy: AuthStrategy;
-  tokenEndpoint?: string;
+  realm?: string;
   clientId?: string;
-  scopes?: string[];
+  clientSecret?: string;
 }
 
 export interface IntegrationConfig {
@@ -64,9 +69,9 @@ export function loadIntegrationConfig(repoName: string): IntegrationConfig | nul
     services: raw.services as Record<string, IntegrationServiceConfig>,
     auth: {
       strategy: (authRaw.strategy as AuthStrategy) ?? "mock-jwt",
-      tokenEndpoint: authRaw.tokenEndpoint as string | undefined,
+      realm: authRaw.realm as string | undefined,
       clientId: authRaw.clientId as string | undefined,
-      scopes: authRaw.scopes as string[] | undefined,
+      clientSecret: authRaw.clientSecret as string | undefined,
     },
     testCommand: raw.testCommand,
     testTimeout: typeof raw.testTimeout === "number" ? raw.testTimeout : 600_000,
