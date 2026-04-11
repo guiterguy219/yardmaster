@@ -5,11 +5,11 @@
  * function (which writes YAML to disk), parse the output, and assert on the
  * Docker Compose structure produced for each service type.
  *
- * Focus areas driven by recent changes to buildKeycloakService:
- *  - svc.env is passed through directly (JDBC URL parsing removed)
- *  - depends_on is always hardcoded to { postgres: { condition: "service_healthy" } }
- *  - healthcheck uses curl instead of the old TCP socket probe
- *  - resolvedSecrets are no longer consulted for KC_DB_* vars
+ * Focus areas:
+ *  - Keycloak gets KC_DB_* env vars from resolvedSecrets (JDBC URL parsing)
+ *  - depends_on only includes docker services listed in svc.dependsOn
+ *  - healthcheck uses TCP socket probe on port 8080
+ *  - KC defaults (admin user, hostname settings) always present
  */
 
 import { describe, it, expect, afterEach } from "vitest";
@@ -53,7 +53,31 @@ function cleanupTestRepo(repoName: string): void {
 describe("generateComposeFile — docker-keycloak", () => {
   afterEach(() => cleanupTestRepo(TEST_REPO));
 
-  it("sets depends_on to postgres with service_healthy regardless of config.dependsOn", () => {
+  it("only adds depends_on for docker services in svc.dependsOn", () => {
+    const config: IntegrationConfig = {
+      enabled: true,
+      testCommand: "npm test",
+      testTimeout: 60_000,
+      auth: { strategy: "keycloak" },
+      services: {
+        postgres: { type: "docker-postgres", image: "postgres:16-alpine" },
+        keycloak: {
+          type: "docker-keycloak",
+          image: "quay.io/keycloak/keycloak:24",
+          dependsOn: ["postgres"],
+        },
+      },
+    };
+
+    generateComposeFile(TEST_REPO, config);
+
+    const svc = composeSvc(TEST_REPO, "keycloak");
+    expect(svc.depends_on).toEqual({
+      postgres: { condition: "service_healthy" },
+    });
+  });
+
+  it("omits depends_on when no dependsOn is configured", () => {
     const config: IntegrationConfig = {
       enabled: true,
       testCommand: "npm test",
@@ -70,12 +94,10 @@ describe("generateComposeFile — docker-keycloak", () => {
     generateComposeFile(TEST_REPO, config);
 
     const svc = composeSvc(TEST_REPO, "keycloak");
-    expect(svc.depends_on).toEqual({
-      postgres: { condition: "service_healthy" },
-    });
+    expect(svc).not.toHaveProperty("depends_on");
   });
 
-  it("uses curl-based healthcheck, not TCP socket probe", () => {
+  it("uses TCP socket healthcheck on port 8080", () => {
     const config: IntegrationConfig = {
       enabled: true,
       testCommand: "npm test",
@@ -95,12 +117,10 @@ describe("generateComposeFile — docker-keycloak", () => {
     const healthcheck = svc.healthcheck as Record<string, unknown>;
     const test = healthcheck.test as string[];
 
-    expect(test).toContain("curl -fsS http://localhost:8080/health || exit 1");
-    // Must NOT use the old TCP socket probe
-    expect(JSON.stringify(test)).not.toContain("/dev/tcp");
+    expect(test).toContain("exec 3<>/dev/tcp/localhost/8080");
   });
 
-  it("passes svc.env through directly without injecting KC_DB_* credentials", () => {
+  it("sets KC default env vars and merges with svc.env", () => {
     const config: IntegrationConfig = {
       enabled: true,
       testCommand: "npm test",
@@ -111,8 +131,6 @@ describe("generateComposeFile — docker-keycloak", () => {
           type: "docker-keycloak",
           image: "quay.io/keycloak/keycloak:24",
           env: {
-            KEYCLOAK_ADMIN: "admin",
-            KEYCLOAK_ADMIN_PASSWORD: "admin",
             KC_HOSTNAME_STRICT: "false",
           },
         },
@@ -124,17 +142,15 @@ describe("generateComposeFile — docker-keycloak", () => {
     const svc = composeSvc(TEST_REPO, "keycloak");
     const environment = svc.environment as Record<string, string>;
 
+    // KC defaults
+    expect(environment["KC_DB"]).toBe("postgres");
     expect(environment["KEYCLOAK_ADMIN"]).toBe("admin");
+    expect(environment["KEYCLOAK_ADMIN_PASSWORD"]).toBe("admin");
+    // svc.env merged
     expect(environment["KC_HOSTNAME_STRICT"]).toBe("false");
-
-    // JDBC-derived keys must NOT be injected automatically
-    expect(environment).not.toHaveProperty("KC_DB_URL");
-    expect(environment).not.toHaveProperty("KC_DB_USERNAME");
-    expect(environment).not.toHaveProperty("KC_DB_PASSWORD");
-    expect(environment).not.toHaveProperty("KC_DB");
   });
 
-  it("omits the environment key entirely when svc.env is empty or absent", () => {
+  it("always sets KC default environment even without svc.env", () => {
     const config: IntegrationConfig = {
       enabled: true,
       testCommand: "npm test",
@@ -144,7 +160,6 @@ describe("generateComposeFile — docker-keycloak", () => {
         keycloak: {
           type: "docker-keycloak",
           image: "quay.io/keycloak/keycloak:24",
-          // no env
         },
       },
     };
@@ -152,10 +167,12 @@ describe("generateComposeFile — docker-keycloak", () => {
     generateComposeFile(TEST_REPO, config);
 
     const svc = composeSvc(TEST_REPO, "keycloak");
-    expect(svc).not.toHaveProperty("environment");
+    const environment = svc.environment as Record<string, string>;
+    expect(environment["KC_DB"]).toBe("postgres");
+    expect(environment["KEYCLOAK_ADMIN"]).toBe("admin");
   });
 
-  it("does not apply resolvedSecrets (KC_DB_JDBC_URL) to the Keycloak service", () => {
+  it("parses resolvedSecrets KC_DB_JDBC_URL into KC_DB_URL/USERNAME/PASSWORD", () => {
     const config: IntegrationConfig = {
       enabled: true,
       testCommand: "npm test",
@@ -169,7 +186,6 @@ describe("generateComposeFile — docker-keycloak", () => {
       },
     };
 
-    // Pass a resolved secret that the old code used to parse for DB credentials
     const resolvedSecrets = {
       KC_DB_JDBC_URL: "jdbc:postgresql://dbuser:dbpass@localhost/mydb",
     };
@@ -177,8 +193,10 @@ describe("generateComposeFile — docker-keycloak", () => {
     generateComposeFile(TEST_REPO, config, resolvedSecrets);
 
     const svc = composeSvc(TEST_REPO, "keycloak");
-    // No environment block at all — secrets must not be injected
-    expect(svc).not.toHaveProperty("environment");
+    const environment = svc.environment as Record<string, string>;
+    expect(environment["KC_DB_URL"]).toBe("jdbc:postgresql://localhost/mydb");
+    expect(environment["KC_DB_USERNAME"]).toBe("dbuser");
+    expect(environment["KC_DB_PASSWORD"]).toBe("dbpass");
   });
 
   it("maps ports correctly when svc.ports is configured", () => {
@@ -251,6 +269,7 @@ describe("generateComposeFile — multi-service with keycloak", () => {
           type: "docker-keycloak",
           image: "quay.io/keycloak/keycloak:24",
           ports: { 8080: 18080 },
+          dependsOn: ["postgres"],
           env: {
             KEYCLOAK_ADMIN: "admin",
             KEYCLOAK_ADMIN_PASSWORD: "admin",
@@ -268,7 +287,7 @@ describe("generateComposeFile — multi-service with keycloak", () => {
     expect(Object.keys(services)).toContain("redis");
     expect(Object.keys(services)).toContain("keycloak");
 
-    // Keycloak always depends on postgres (hardcoded)
+    // Keycloak depends on postgres (via dependsOn config)
     const kc = services.keycloak as Record<string, unknown>;
     expect(kc.depends_on).toEqual({ postgres: { condition: "service_healthy" } });
 

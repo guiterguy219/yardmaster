@@ -242,23 +242,33 @@ describe("generateComposeFile — keycloak service", () => {
     expect(svc.image).toBe("quay.io/keycloak/keycloak:23");
   });
 
-  it("declares depends_on postgres with service_healthy condition", () => {
-    const config = makeConfig({ keycloak: { type: "docker-keycloak", image: "quay.io/keycloak/keycloak:23" } });
+  it("only adds depends_on for docker services listed in dependsOn config", () => {
+    const config = makeConfig({
+      postgres: { type: "docker-postgres" },
+      keycloak: { type: "docker-keycloak", image: "quay.io/keycloak/keycloak:23", dependsOn: ["postgres"] },
+    });
     generateComposeFile("my-repo", config);
     const svc = (captureWrittenCompose().services as Record<string, unknown>).keycloak as Record<string, unknown>;
     expect(svc.depends_on).toEqual({ postgres: { condition: "service_healthy" } });
   });
 
-  it("includes healthcheck targeting /health on port 8080", () => {
+  it("omits depends_on when no dependsOn is configured", () => {
+    const config = makeConfig({ keycloak: { type: "docker-keycloak", image: "quay.io/keycloak/keycloak:23" } });
+    generateComposeFile("my-repo", config);
+    const svc = (captureWrittenCompose().services as Record<string, unknown>).keycloak as Record<string, unknown>;
+    expect(svc).not.toHaveProperty("depends_on");
+  });
+
+  it("includes TCP healthcheck on port 8080", () => {
     const config = makeConfig({ keycloak: { type: "docker-keycloak", image: "quay.io/keycloak/keycloak:23" } });
     generateComposeFile("my-repo", config);
     const svc = (captureWrittenCompose().services as Record<string, unknown>).keycloak as Record<string, unknown>;
     const hc = svc.healthcheck as Record<string, unknown>;
     const testCmd = (hc.test as string[]).join(" ");
-    expect(testCmd).toContain("http://localhost:8080/health");
+    expect(testCmd).toContain("exec 3<>/dev/tcp/localhost/8080");
   });
 
-  it("sets environment block when env is provided", () => {
+  it("merges svc.env with KC defaults in environment", () => {
     const config = makeConfig({
       keycloak: {
         type: "docker-keycloak",
@@ -268,14 +278,23 @@ describe("generateComposeFile — keycloak service", () => {
     });
     generateComposeFile("my-repo", config);
     const svc = (captureWrittenCompose().services as Record<string, unknown>).keycloak as Record<string, unknown>;
-    expect(svc.environment).toEqual({ KC_DB: "postgres", KC_DB_URL: "jdbc:postgresql://db/kc" });
+    const env = svc.environment as Record<string, string>;
+    // svc.env overrides KC defaults
+    expect(env.KC_DB).toBe("postgres");
+    expect(env.KC_DB_URL).toBe("jdbc:postgresql://db/kc");
+    // KC defaults still present
+    expect(env.KC_HOSTNAME_STRICT).toBe("false");
+    expect(env.KEYCLOAK_ADMIN).toBe("admin");
   });
 
-  it("omits environment when no env is provided", () => {
+  it("sets KC default environment even when no svc.env is provided", () => {
     const config = makeConfig({ keycloak: { type: "docker-keycloak", image: "quay.io/keycloak/keycloak:23" } });
     generateComposeFile("my-repo", config);
     const svc = (captureWrittenCompose().services as Record<string, unknown>).keycloak as Record<string, unknown>;
-    expect(svc).not.toHaveProperty("environment");
+    const env = svc.environment as Record<string, string>;
+    expect(env.KC_DB).toBe("postgres");
+    expect(env.KEYCLOAK_ADMIN).toBe("admin");
+    expect(env.KEYCLOAK_ADMIN_PASSWORD).toBe("admin");
   });
 });
 
