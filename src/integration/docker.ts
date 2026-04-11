@@ -19,7 +19,7 @@ export function getComposePath(repoName: string): string {
   return join(getComposeDir(repoName), "docker-compose.yml");
 }
 
-export function generateComposeFile(repoName: string, config: IntegrationConfig): string {
+export function generateComposeFile(repoName: string, config: IntegrationConfig, resolvedSecrets?: Record<string, string>): string {
   const compose: Record<string, unknown> = {
     version: "3.8",
     services: {} as Record<string, unknown>,
@@ -35,7 +35,7 @@ export function generateComposeFile(repoName: string, config: IntegrationConfig)
     } else if (svc.type === "docker-postgres") {
       services[name] = buildPostgresService(svc);
     } else if (svc.type === "docker-keycloak") {
-      services[name] = buildKeycloakService(svc);
+      services[name] = buildKeycloakService(svc, config, resolvedSecrets);
     }
   }
 
@@ -91,26 +91,74 @@ function buildPostgresService(svc: IntegrationServiceConfig): Record<string, unk
   return service;
 }
 
-function buildKeycloakService(svc: IntegrationServiceConfig): Record<string, unknown> {
+function parseJdbcUrl(jdbcUrl: string): { dbUrl: string; dbUsername?: string; dbPassword?: string } {
+  // jdbc:postgresql://user:pass@host/db?params → jdbc:postgresql://host/db?params + user + pass
+  const match = jdbcUrl.match(/^(jdbc:postgresql:\/\/)([^:]+):([^@]+)@(.+)$/);
+  if (match) {
+    return { dbUrl: `${match[1]}${match[4]}`, dbUsername: match[2], dbPassword: match[3] };
+  }
+  return { dbUrl: jdbcUrl };
+}
+
+function buildKeycloakService(
+  svc: IntegrationServiceConfig,
+  config: IntegrationConfig,
+  resolvedSecrets?: Record<string, string>,
+): Record<string, unknown> {
+  const kcDbJdbcUrl = resolvedSecrets?.["KC_DB_JDBC_URL"] ?? "";
+
+  // Parse JDBC URL to extract credentials — Keycloak needs them as separate env vars
+  // Format: jdbc:postgresql://user:pass@host/db?params
+  const { dbUrl, dbUsername, dbPassword } = parseJdbcUrl(kcDbJdbcUrl);
+
+  const environment: Record<string, string> = {
+    KC_DB: "postgres",
+    KC_DB_URL: dbUrl,
+    ...(dbUsername ? { KC_DB_USERNAME: dbUsername } : {}),
+    ...(dbPassword ? { KC_DB_PASSWORD: dbPassword } : {}),
+    KC_HOSTNAME_STRICT: "false",
+    KC_HTTP_ENABLED: "true",
+    KC_PROXY_HEADERS: "xforwarded",
+    KEYCLOAK_ADMIN: "admin",
+    KEYCLOAK_ADMIN_PASSWORD: "admin",
+    ...(svc.env ?? {}),
+  };
+
   const service: Record<string, unknown> = {
     image: svc.image,
+    environment,
+    command: ["start-dev"],
   };
+
   const ports = mapPorts(svc.ports);
   if (ports) service.ports = ports;
-  if (svc.env) service.environment = svc.env;
-  service.depends_on = {
-    postgres: { condition: "service_healthy" },
-  };
+
+  // Only add depends_on for docker services that exist in the compose file
+  if (svc.dependsOn) {
+    const dockerDeps: Record<string, { condition: string }> = {};
+    for (const dep of svc.dependsOn) {
+      const depSvc = config.services[dep];
+      if (depSvc?.type.startsWith("docker-")) {
+        dockerDeps[dep] = { condition: "service_healthy" };
+      }
+    }
+    if (Object.keys(dockerDeps).length > 0) {
+      service.depends_on = dockerDeps;
+    }
+  }
+
   service.healthcheck = {
-    test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+    test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080"],
     interval: "5s",
     timeout: "5s",
     retries: 30,
+    start_period: "30s",
   };
+
   return service;
 }
 
-export function startServices(repoName: string, config: IntegrationConfig): DockerComposeResult {
+export function startServices(repoName: string, config: IntegrationConfig, resolvedSecrets?: Record<string, string>): DockerComposeResult {
   const dockerServices = Object.entries(config.services)
     .filter(([, svc]) => svc.type.startsWith("docker-"));
 
@@ -121,7 +169,7 @@ export function startServices(repoName: string, config: IntegrationConfig): Dock
   }
 
   try {
-    generateComposeFile(repoName, config);
+    generateComposeFile(repoName, config, resolvedSecrets);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return { started: false, services: serviceNames, error: message };

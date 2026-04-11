@@ -51,12 +51,20 @@ export function ensureKeycloakImage(clonePath?: string): { ready: boolean; error
 }
 
 export function getKeycloakComposeService(kcDbJdbcUrl: string, hostPort: number = 18080): Record<string, unknown> {
+  // Parse JDBC URL to extract credentials — Keycloak needs them as separate env vars
+  const match = kcDbJdbcUrl.match(/^(jdbc:postgresql:\/\/)([^:]+):([^@]+)@(.+)$/);
+  const dbUrl = match ? `${match[1]}${match[4]}` : kcDbJdbcUrl;
+  const dbUsername = match?.[2];
+  const dbPassword = match?.[3];
+
   return {
     image: `${IMAGE_NAME}:${IMAGE_TAG}`,
     ports: [`${hostPort}:8080`],
     environment: {
       KC_DB: "postgres",
-      KC_DB_URL: kcDbJdbcUrl,
+      KC_DB_URL: dbUrl,
+      ...(dbUsername ? { KC_DB_USERNAME: dbUsername } : {}),
+      ...(dbPassword ? { KC_DB_PASSWORD: dbPassword } : {}),
       KC_HOSTNAME_STRICT: "false",
       KC_HTTP_ENABLED: "true",
       KC_PROXY_HEADERS: "xforwarded",

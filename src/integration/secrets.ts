@@ -115,10 +115,19 @@ export async function resolveSecrets(
     resolved["AUTH_AUDIENCE"] = config.auth.clientId ?? "threatzero-api";
     resolved["KEYCLOAK_ADMIN_CLIENT_BASE_URL"] = kcUrl;
 
-    // Prompt for secrets that can't be derived
-    resolved["KEYCLOAK_ADMIN_CLIENT_CLIENT_SECRET"] = await resolveSecret(
+    // Client secret for the API client (used for OIDC password grant in tests)
+    resolved["KC_CLIENT_SECRET"] = await resolveSecret(
       repoName, "KC_CLIENT_SECRET", `Keycloak client secret for ${config.auth.clientId ?? "threatzero-api"}`
     );
+
+    // KC admin client credentials (service account in master realm for admin API)
+    resolved["KC_ADMIN_CLIENT_ID"] = await resolveSecret(
+      repoName, "KC_ADMIN_CLIENT_ID", "Keycloak admin client ID (e.g. admin-http-client)"
+    );
+    resolved["KC_ADMIN_CLIENT_SECRET"] = await resolveSecret(
+      repoName, "KC_ADMIN_CLIENT_SECRET", "Keycloak admin client secret"
+    );
+
     resolved["KC_TEST_USERNAME"] = await resolveSecret(repoName, "KC_TEST_USERNAME", "Keycloak test user username");
     resolved["KC_TEST_PASSWORD"] = await resolveSecret(repoName, "KC_TEST_PASSWORD", "Keycloak test user password");
 
@@ -146,6 +155,9 @@ export function buildIntegrationEnv(
   const kcUrl = resolvedSecrets["KEYCLOAK_URL"] ?? "http://localhost:18080";
 
   // Dummy values for services not under test — required by Zod config validation
+  const adminClientId = resolvedSecrets["KC_ADMIN_CLIENT_ID"] ?? "admin-cli";
+  const adminClientSecret = resolvedSecrets["KC_ADMIN_CLIENT_SECRET"] ?? "dummy-secret";
+
   const baseEnv: Record<string, string> = {
     NODE_ENV: "test",
     APP_HOST: "http://localhost:3000",
@@ -154,10 +166,10 @@ export function buildIntegrationEnv(
     AUTH_ISSUER: `${kcUrl}/realms/${realm}`,
     AUTH_AUDIENCE: config.auth.clientId ?? "threatzero-api",
     AUTH_JWKS_URI: `${kcUrl}/realms/${realm}/protocol/openid-connect/certs`,
-    // Keycloak admin
+    // Keycloak admin (service account in master realm)
     KEYCLOAK_ADMIN_CLIENT_BASE_URL: kcUrl,
-    KEYCLOAK_ADMIN_CLIENT_CLIENT_ID: "admin-cli",
-    KEYCLOAK_ADMIN_CLIENT_CLIENT_SECRET: "dummy-secret",
+    KEYCLOAK_ADMIN_CLIENT_CLIENT_ID: adminClientId,
+    KEYCLOAK_ADMIN_CLIENT_CLIENT_SECRET: adminClientSecret,
     KEYCLOAK_ADMIN_CLIENT_ADMIN_REALM: "master",
     KEYCLOAK_ADMIN_CLIENT_DEFAULT_REALM: realm,
     KEYCLOAK_PARENT_ORGANIZATIONS_GROUP_ID: "00000000-0000-0000-0000-000000000001",
@@ -169,7 +181,7 @@ export function buildIntegrationEnv(
     REDIS_TLS: "false",
     // Database
     DB_URL: "postgresql://postgres:postgres@localhost:5432/app",
-    DB_SSL_ENABLED: "false",
+    DB_SSL_ENABLED: "true",
     DB_LOGGING: "false",
     // AWS (not used in integration tests — dummy values)
     AWS_REGION: "us-west-2",

@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { execSync, spawnSync } from "child_process";
+import { homedir } from "os";
 import { Command } from "commander";
 import { executeTask } from "./task-runner.js";
 import { loadConfig, getRepo } from "./config.js";
@@ -684,6 +685,7 @@ integrationCmd
     const { resolveSecrets } = await import("./integration/secrets.js");
     const { startServices, isDockerAvailable } = await import("./integration/docker.js");
     const { scaffoldIntegrationTests } = await import("./integration/scaffold.js");
+    const { ensureKeycloakImage } = await import("./integration/keycloak.js");
 
     const integrationConfig = loadIntegrationConfig(repo.name);
     if (!integrationConfig) {
@@ -693,6 +695,24 @@ integrationCmd
     }
 
     console.log(`\nIntegration setup for ${repo.name}\n`);
+
+    // Build Keycloak image if needed
+    const hasKeycloak = Object.values(integrationConfig.services).some(
+      (s) => s.type === "docker-keycloak"
+    );
+    if (hasKeycloak) {
+      console.log("Ensuring Keycloak Docker image...");
+      const kcSvc = Object.values(integrationConfig.services).find(
+        (s) => s.type === "docker-keycloak"
+      );
+      const clonePath = kcSvc?.build?.clonePath?.replace("~", homedir());
+      const kcResult = ensureKeycloakImage(clonePath);
+      if (!kcResult.ready) {
+        console.error(`  Failed to build Keycloak image: ${kcResult.error}`);
+        process.exit(1);
+      }
+      console.log("  Keycloak image ready\n");
+    }
 
     // Prompt for secrets
     console.log("Resolving secrets...");
@@ -709,7 +729,7 @@ integrationCmd
         process.exit(1);
       }
       console.log("Starting Docker services...");
-      const result = startServices(repo.name, integrationConfig);
+      const result = startServices(repo.name, integrationConfig, secrets);
       if (result.started) {
         console.log(`  Services ready: ${result.services.join(", ")}\n`);
       } else {

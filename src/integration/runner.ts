@@ -60,7 +60,7 @@ export async function runIntegrationTests(
   let dockerStarted = false;
   if (hasDockerServices) {
     console.log(`    Starting Docker services...`);
-    const dockerResult = startServices(repo.name, integrationConfig);
+    const dockerResult = startServices(repo.name, integrationConfig, secrets);
     if (!dockerResult.started) {
       return { ran: true, passed: false, testsWritten: false, output: `Docker failed: ${dockerResult.error || "unknown error"}`, attempts: 0 };
     }
