@@ -197,6 +197,22 @@ export async function executeTask(
       console.log(`  Browser validation passed`);
     }
 
+    // Final check before PR — catches type errors from test quality agent, integration tests, etc.
+    if (repo.checkCommand) {
+      console.log(`  Final check: ${repo.checkCommand}`);
+      try {
+        execSync(repo.checkCommand, { cwd: worktree.path, stdio: "pipe" });
+        console.log(`  Final check passed`);
+      } catch (err) {
+        const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
+        console.log(`  Final check FAILED`);
+        const finalCheckError = `Final check failed: ${checkError.slice(0, 200)}`;
+        updateTask(taskId, { status: "failed", error: finalCheckError });
+        if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+        return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+      }
+    }
+
     // Commit, push, and create PR
     console.log(`  Creating PR...`);
     const gitResult = commitAndPush(repo, worktree, description, reviewSummaryWithTests, targetBranch);
