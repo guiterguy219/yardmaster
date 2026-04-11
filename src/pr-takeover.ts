@@ -133,7 +133,7 @@ export async function takeoverPr(prUrl: string): Promise<TaskResult> {
 
   const result = await executeTask(repo.name, description, {
     baseBranch: context.headRefName,
-    targetBranch: context.baseRefName,
+    targetBranch: context.headRefName,
   });
 
   if (result.success && result.prUrl) {
