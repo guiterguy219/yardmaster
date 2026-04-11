@@ -19,11 +19,18 @@ export interface TaskResult {
   error?: string;
 }
 
+export interface ExecuteTaskOptions {
+  issueRef?: string;
+  baseBranch?: string;
+  targetBranch?: string;
+}
+
 export async function executeTask(
   repoName: string,
   description: string,
-  issueRef?: string
+  options: ExecuteTaskOptions = {}
 ): Promise<TaskResult> {
+  const { issueRef, baseBranch, targetBranch } = options;
   const config = loadConfig();
   const repo = getRepo(config, repoName);
 
@@ -58,7 +65,7 @@ export async function executeTask(
   try {
     // Create worktree
     console.log(`  Creating worktree...`);
-    worktree = createWorktree(config, repo, taskId);
+    worktree = createWorktree(config, repo, taskId, baseBranch);
     updateTask(taskId, { branch: worktree.branch });
     updatePipelineStage(taskId, "worktree_created");
     console.log(`  Worktree: ${worktree.path}`);
@@ -171,7 +178,7 @@ export async function executeTask(
 
     // Commit, push, and create PR
     console.log(`  Creating PR...`);
-    const gitResult = commitAndPush(repo, worktree, description, reviewSummaryWithTests);
+    const gitResult = commitAndPush(repo, worktree, description, reviewSummaryWithTests, targetBranch);
 
     if (gitResult.committed) {
       updatePipelineStage(taskId, "committed");
