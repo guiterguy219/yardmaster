@@ -55,10 +55,10 @@ program
 // P0 immediate — runs now, bypasses queue
 program
   .command("task")
-  .description("Run an autonomous coding task immediately (P0)")
+  .description("Run an autonomous coding task immediately (P0), bypassing the queue. Runs the full pipeline: planner → coder → style/logic reviewers → check command → tests → PR creation. Use --file for complex multi-paragraph specs.")
   .argument("[description]", "What the agent should do")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
-  .option("--file <path>", "Read task description from a file")
+  .option("--file <path>", "Read task description from a file (recommended for complex, multi-paragraph specs)")
   .action(async (description: string | undefined, opts: { repo: string; file?: string }) => {
     const taskDescription = resolveDescription(description, opts.file);
 
@@ -117,9 +117,9 @@ program
 // Take over an existing PR
 program
   .command("pr")
-  .description("Take over an existing PR — apply review feedback and push fixes")
+  .description("Take over an existing GitHub PR — branches from its head, applies review feedback and improvements, then creates a new PR targeting the feature branch.")
   .argument("<url>", "GitHub PR URL (e.g. https://github.com/owner/repo/pull/123)")
-  .option("--description <text>", "Additional context for the agent")
+  .option("--description <text>", "Additional context or instructions to pass to the agent")
   .action(async (url: string, opts: { description?: string }) => {
     console.log(`\nYardmaster — PR Takeover`);
     console.log(`  PR: ${url}\n`);
@@ -147,15 +147,15 @@ program
 // Add to queue or show queue contents
 const queueCmd = program
   .command("queue")
-  .description("Add a task to the queue or show queue contents");
+  .description("Add tasks to the background queue or inspect its contents. A worker must be running ('ym worker') to process queued tasks.");
 
 queueCmd
   .command("add")
-  .description("Add a task to the queue")
+  .description("Add a coding task to the background queue for async processing by 'ym worker'. Priority defaults to 'normal'; use 'urgent' or 'high' to jump the line.")
   .argument("[description]", "What the agent should do")
   .requiredOption("--repo <name>", "Target repository name")
   .option("--file <path>", "Read task description from a file")
-  .option("--priority <level>", "Priority: urgent, high, normal, low", "normal")
+  .option("--priority <level>", "Task priority: urgent (P1), high (P2), normal (P3, default), or low (P4)", "normal")
   .action(async (description: string | undefined, opts: { repo: string; file?: string; priority: string }) => {
     const taskDescription = resolveDescription(description, opts.file);
     const priority = parsePriority(opts.priority);
@@ -168,7 +168,7 @@ queueCmd
 
 queueCmd
   .command("show")
-  .description("Show queued tasks")
+  .description("Display all queued tasks ordered by priority, showing job ID, repo, description snippet, and how long each has been waiting.")
   .action(async () => {
     const tasks = await getQueueContents();
 
@@ -192,7 +192,7 @@ queueCmd
 // ── ym bump ─────────────────────────────────────────────
 program
   .command("bump")
-  .description("Change a queued task's priority")
+  .description("Reprioritize a queued task to a new priority level (urgent, high, normal, low). The task must still be waiting in the queue.")
   .argument("<jobId>", "Job ID to reprioritize")
   .argument("<priority>", "New priority: urgent, high, normal, low")
   .action(async (jobId: string, priority: string) => {
@@ -205,7 +205,7 @@ program
 // ── ym remove ───────────────────────────────────────────
 program
   .command("remove")
-  .description("Remove a task from the queue")
+  .description("Remove a task from the queue before it is processed. Has no effect on tasks that are already running.")
   .argument("<jobId>", "Job ID to remove")
   .action(async (jobId: string) => {
     await removeJob(jobId);
@@ -216,7 +216,7 @@ program
 // ── ym worker ───────────────────────────────────────────
 program
   .command("worker")
-  .description("Start the background worker (processes queue)")
+  .description("Start the background task worker, which processes queued tasks in priority order. Runs until Ctrl+C; use with a process manager (e.g. systemd) for persistent operation.")
   .action(async () => {
     console.log("Yardmaster worker starting...");
     const worker = startWorker();
@@ -237,7 +237,7 @@ program
 // ── ym scan ─────────────────────────────────────────────
 program
   .command("scan")
-  .description("Scan all repos for ym-labeled GitHub issues and queue them")
+  .description("Scan all configured GitHub repos for open issues labeled 'ym*' and enqueue them as tasks. Skips issues that are already queued or completed.")
   .action(async () => {
     console.log("Scanning repos for issues...\n");
     const result = await scanReposForIssues();
@@ -254,8 +254,8 @@ program
 // ── ym status ───────────────────────────────────────────
 program
   .command("status")
-  .description("Show recent task history")
-  .option("-n, --limit <number>", "Number of tasks to show", "10")
+  .description("Show recent task history with outcomes (done, failed, partial) and PR URLs. Defaults to the last 10 tasks; use -n to show more.")
+  .option("-n, --limit <number>", "Number of recent tasks to display (default: 10)", "10")
   .action((opts: { limit: string }) => {
     const tasks = getRecentTasks(parseInt(opts.limit, 10));
 
@@ -277,7 +277,7 @@ program
 // ── ym doctor ───────────────────────────────────────────
 program
   .command("doctor")
-  .description("Run pre-flight checks (git, gh, claude, ssh, redis, repos)")
+  .description("Validate all prerequisites: git, gh CLI, claude CLI, SSH keys, Redis connectivity, and repos.json entries. Exits non-zero if any check fails.")
   .action(async () => {
     const exitCode = await runDoctor();
     process.exit(exitCode);
@@ -286,7 +286,7 @@ program
 // ── ym worker-status ────────────────────────────────────
 program
   .command("worker-status")
-  .description("Show systemd service, Redis, queue depth, and last task")
+  .description("Show the current state of the yardmaster systemd service, Redis connection, queue depth, and the most recent task outcome.")
   .action(async () => {
     // systemd service status
     let serviceStatus: string;
@@ -339,8 +339,8 @@ program
 // ── ym recover ──────────────────────────────────────────
 program
   .command("recover")
-  .description("Detect dead workers, recover interrupted tasks, and GC orphaned worktrees")
-  .option("--gc", "Also remove orphaned worktrees for completed/failed tasks")
+  .description("Detect tasks whose worker processes have died, mark them interrupted, and attempt to resume them. Use --gc to also remove orphaned worktrees for finished tasks.")
+  .option("--gc", "Also remove orphaned worktrees left behind by completed or failed tasks")
   .action(async (opts: { gc?: boolean }) => {
     const config = loadConfig();
 
@@ -396,7 +396,7 @@ async function runIngest(repoName: string): Promise<void> {
 // ── ym ingest ──────────────────────────────────────────
 program
   .command("ingest")
-  .description("Ingest CLAUDE.md and config files into the context store")
+  .description("Scan a repo's CLAUDE.md and config files and store the extracted context in the context store, making it available to all agents.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .action(async (opts: { repo: string }) => {
     await runIngest(opts.repo);
@@ -405,14 +405,14 @@ program
 // ── ym context ─────────────────────────────────────────
 const contextCmd = program
   .command("context")
-  .description("Manage the context store (search, lookup, ingest, stats)");
+  .description("Inspect and manage the per-repo context store used to give agents project-specific knowledge.");
 
 contextCmd
   .command("search")
-  .description("Search context entries by keyword")
+  .description("Full-text search the context store for entries matching a keyword, with optional kind filter (file, dependency, convention, snippet, note).")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .argument("<query>", "Search term to match against key and content")
-  .option("--kind <kind>", "Filter by kind: file, dependency, convention, snippet, note")
+  .option("--kind <kind>", "Restrict results to a specific entry kind: file, dependency, convention, snippet, or note")
   .action((query: string, opts: { repo: string; kind?: string }) => {
     const kind = opts.kind as ContextKind | undefined;
     const escapedQuery = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
@@ -436,7 +436,7 @@ contextCmd
 
 contextCmd
   .command("lookup")
-  .description("Look up a specific context entry by id or by repo/kind/key")
+  .description("Retrieve a single context entry by numeric ID, or by the combination of --repo, --kind, and --key.")
   .option("--id <id>", "Lookup by entry ID")
   .option("--repo <name>", "Repository name")
   .option("--kind <kind>", "Entry kind: file, dependency, convention, snippet, note")
@@ -477,7 +477,7 @@ contextCmd
 
 contextCmd
   .command("ingest")
-  .description("Ingest CLAUDE.md and config files into the context store")
+  .description("Scan a repo's CLAUDE.md and config files and store the extracted context in the context store, making it available to all agents.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .action(async (opts: { repo: string }) => {
     await runIngest(opts.repo);
@@ -485,7 +485,7 @@ contextCmd
 
 contextCmd
   .command("ingest-docs")
-  .description("Fetch, chunk, and store web documentation pages")
+  .description("Fetch one or more documentation URLs, chunk them, and store the content in the context store under the given library name.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .requiredOption("--lib <name>", "Library name (used as key prefix, e.g. 'zod')")
   .argument("<urls...>", "One or more documentation URLs to ingest")
@@ -502,9 +502,9 @@ contextCmd
 
 contextCmd
   .command("prune-docs")
-  .description("Remove stale documentation entries older than N days")
+  .description("Remove doc entries older than N days from the context store (default: 30 days). Use this to evict outdated library docs.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
-  .option("--days <n>", "Remove entries older than this many days", "30")
+  .option("--days <n>", "Remove entries older than this many days (default: 30)", "30")
   .action((opts: { repo: string; days: string }) => {
     const days = parseDays(opts.days);
 
@@ -514,7 +514,7 @@ contextCmd
 
 contextCmd
   .command("docs")
-  .description("Search the web for documentation, then fetch, chunk, and store it")
+  .description("Web-search for documentation pages matching the query, then fetch, chunk, and store them. Combines 'ym context ingest-docs' with automatic URL discovery.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .requiredOption("--lib <name>", "Library name (used as key prefix, e.g. 'zod')")
   .argument("<query>", "Search query to find documentation pages")
@@ -544,9 +544,9 @@ contextCmd
 
 contextCmd
   .command("purge")
-  .description("Purge stale web doc entries and their raw content hashes")
+  .description("Remove stale web doc entries and their raw content hashes from the context store. More thorough than prune-docs; also cleans up orphaned hash records.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
-  .option("--days <n>", "Remove entries older than this many days", "30")
+  .option("--days <n>", "Remove entries older than this many days (default: 30)", "30")
   .action((opts: { repo: string; days: string }) => {
     const days = parseDays(opts.days);
 
@@ -559,7 +559,7 @@ contextCmd
 
 contextCmd
   .command("stats")
-  .description("Show context budget usage per agent role")
+  .description("Show how much of each agent role's context budget is in use, broken down by entry kind and fill percentage.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .action((opts: { repo: string }) => {
     const roles = ALL_AGENT_ROLES;
@@ -595,7 +595,7 @@ contextCmd
 
 contextCmd
   .command("history")
-  .description("Analyze completed task history and extract insights")
+  .description("Analyze completed task history for a repo and store extracted patterns and insights into the context store for future tasks.")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .action(async (opts: { repo: string }) => {
     const config = loadConfig();
@@ -629,8 +629,8 @@ contextCmd
 
 contextCmd
   .command("maintenance")
-  .description("Run all context maintenance tasks (purge stale docs + ingest history)")
-  .option("--repo <name>", "Target repository name (or all repos if omitted)")
+  .description("Run all context maintenance tasks: purge stale web docs and ingest task history insights. Runs across all repos if --repo is omitted.")
+  .option("--repo <name>", "Target a single repository; omit to run maintenance across all configured repos")
   .action(async (opts: { repo?: string }) => {
     const config = loadConfig();
     const repos = opts.repo
@@ -671,11 +671,11 @@ contextCmd
 // ── ym integration ─────────────────────────────────────
 const integrationCmd = program
   .command("integration")
-  .description("Manage integration test infrastructure");
+  .description("Manage Docker-based integration test infrastructure for a repo (setup, start/stop services, run tests).");
 
 integrationCmd
   .command("setup")
-  .description("Set up integration test infrastructure for a repo")
+  .description("Interactive first-time setup: prompt for secrets, start Docker services, and scaffold test utility files for the repo's integration suite.")
   .requiredOption("--repo <name>", "Repository name")
   .action(async (opts: { repo: string }) => {
     const config = loadConfig();
@@ -729,7 +729,7 @@ integrationCmd
 
 integrationCmd
   .command("start")
-  .description("Start Docker services for integration tests")
+  .description("Start the Docker services (postgres, redis, keycloak, etc.) defined in the repo's integration config without running any tests.")
   .requiredOption("--repo <name>", "Repository name")
   .action(async (opts: { repo: string }) => {
     const { loadIntegrationConfig } = await import("./integration/config.js");
@@ -750,7 +750,7 @@ integrationCmd
 
 integrationCmd
   .command("stop")
-  .description("Stop Docker services for integration tests")
+  .description("Stop all Docker services that were started for the repo's integration tests.")
   .requiredOption("--repo <name>", "Repository name")
   .action(async (opts: { repo: string }) => {
     const { stopServices } = await import("./integration/docker.js");
@@ -760,7 +760,7 @@ integrationCmd
 
 integrationCmd
   .command("test")
-  .description("Run integration tests manually")
+  .description("Run the repo's integration tests manually (outside the normal pipeline), with up to 2 auto-fix attempts on failure.")
   .requiredOption("--repo <name>", "Repository name")
   .action(async (opts: { repo: string }) => {
     const config = loadConfig();
@@ -782,7 +782,7 @@ integrationCmd
 // ── ym capacity ─────────────────────────────────────────
 program
   .command("capacity")
-  .description("Check current rate limit capacity")
+  .description("Check current Claude rate-limit capacity and whether new tasks can be started, including overage status and reset time.")
   .action(() => {
     const cap = checkCapacity();
     console.log(`\nCapacity:`);
@@ -841,16 +841,17 @@ function formatAge(timestamp: number): string {
 
 const helperCmd = program
   .command("helper")
-  .description("Helper utilities for authentication and integration workflows");
+  .description("Utility sub-commands for authentication and external service workflows.");
 
 helperCmd
   .command("oidc-auth")
-  .requiredOption("--issuer <url>", "OIDC issuer URL")
-  .requiredOption("--client-id <id>", "OAuth client ID")
-  .option("--client-secret <secret>", "OAuth client secret (or set OIDC_CLIENT_SECRET)")
-  .requiredOption("--username <user>", "Username for resource owner password grant")
-  .option("--password <pass>", "Password (or set OIDC_PASSWORD env var)")
-  .option("--json", "Output full token response as JSON")
+  .description("Obtain a JWT access token from a Keycloak-compatible OIDC provider via the resource owner password grant. Prints the access token by default; use --json for the full response.")
+  .requiredOption("--issuer <url>", "OIDC issuer URL (e.g. https://auth.example.com/realms/myrealm)")
+  .requiredOption("--client-id <id>", "OAuth2 client ID registered with the OIDC provider")
+  .option("--client-secret <secret>", "OAuth2 client secret; alternatively set the OIDC_CLIENT_SECRET environment variable")
+  .requiredOption("--username <user>", "Username to authenticate (resource owner password grant)")
+  .option("--password <pass>", "Password to authenticate; alternatively set the OIDC_PASSWORD environment variable")
+  .option("--json", "Output the full token response as JSON instead of just the access token")
   .action(async (opts: { issuer: string; clientId: string; clientSecret?: string; username: string; password?: string; json?: boolean }) => {
     try {
       const password = opts.password || process.env.OIDC_PASSWORD || "";
