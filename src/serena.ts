@@ -1,6 +1,9 @@
 import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+
+const SERENA_PACKAGE = "git+https://github.com/oraios/serena@v1.0.0";
 
 /**
  * Write a temporary MCP config file for Serena and return its path.
@@ -8,7 +11,7 @@ import { tmpdir } from "node:os";
  * --mcp-config is passed — no manual spawn needed.
  */
 export function createSerenaConfig(worktreePath: string): string {
-  const tempConfigPath = join(tmpdir(), `ym-serena-${Date.now()}-${process.pid}.json`);
+  const tempConfigPath = join(tmpdir(), `ym-serena-${randomUUID()}.json`);
   const mcpConfig = {
     mcpServers: {
       serena: {
@@ -16,7 +19,7 @@ export function createSerenaConfig(worktreePath: string): string {
         command: "uvx",
         args: [
           "--from",
-          "git+https://github.com/oraios/serena@v1.0.0",
+          SERENA_PACKAGE,
           "serena",
           "start-mcp-server",
           "--context",
