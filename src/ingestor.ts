@@ -60,7 +60,66 @@ const VALID_ROLES = new Set<string>([
   "logic-reviewer",
   "planner",
   "tools-agent",
+  "test-quality",
+  "integration-test",
 ]);
+
+const TEST_FILE_PATTERNS = [
+  /vitest\.config\./,
+  /jest\.config\./,
+  /\.test\.[tj]sx?$/,
+  /\.spec\.[tj]sx?$/,
+  /setupTests\./,
+];
+
+const TEST_KEYWORDS = [
+  "test", "spec", "mock", "fixture", "jest", "vitest",
+  "supertest", "describe", "it(", "expect(",
+];
+
+const ARCHITECTURE_KEYWORDS = [
+  "architecture", "module", "structure", "overview", "project layout",
+];
+
+const INTEGRATION_KEYWORDS = [
+  "error handling", "auth", "authentication", "database",
+  "data access", "migration", "repository",
+];
+
+/**
+ * Enrich chunks with test-quality and integration-test roles based on
+ * file name patterns and chunk content/key keywords.
+ */
+function enrichTestRoles(fileName: string, chunks: IngestorChunk[]): IngestorChunk[] {
+  const isTestFile = TEST_FILE_PATTERNS.some((pat) => pat.test(fileName));
+
+  return chunks.map((chunk) => {
+    const roles = new Set(chunk.agentRoles);
+
+    if (isTestFile) {
+      roles.add("test-quality");
+      roles.add("integration-test");
+    }
+
+    const searchText = `${chunk.key} ${chunk.content}`.toLowerCase();
+
+    if (TEST_KEYWORDS.some((kw) => searchText.includes(kw))) {
+      roles.add("test-quality");
+      roles.add("integration-test");
+    }
+
+    if (ARCHITECTURE_KEYWORDS.some((kw) => searchText.includes(kw))) {
+      roles.add("test-quality");
+      roles.add("integration-test");
+    }
+
+    if (INTEGRATION_KEYWORDS.some((kw) => searchText.includes(kw))) {
+      roles.add("integration-test");
+    }
+
+    return { ...chunk, agentRoles: [...roles] };
+  });
+}
 
 function validateChunk(chunk: IngestorChunk): IngestorChunk | null {
   if (!chunk.key || typeof chunk.key !== "string") return null;
@@ -97,13 +156,13 @@ async function chunkWithHaiku(
 
   if (!result.success) {
     console.log(`  Warning: haiku chunking failed for ${fileName}, storing as single chunk`);
-    return [fallbackChunk(fileName, fileContent)];
+    return enrichTestRoles(fileName, [fallbackChunk(fileName, fileContent)]);
   }
 
   const parsed = parseAgentJson<IngestorOutput>(result.result);
   if (!parsed?.chunks || !Array.isArray(parsed.chunks) || parsed.chunks.length === 0) {
     console.log(`  Warning: haiku returned no chunks for ${fileName}, storing as single chunk`);
-    return [fallbackChunk(fileName, fileContent)];
+    return enrichTestRoles(fileName, [fallbackChunk(fileName, fileContent)]);
   }
 
   const validated: IngestorChunk[] = [];
@@ -112,7 +171,8 @@ async function chunkWithHaiku(
     if (chunk) validated.push(chunk);
   }
 
-  return validated.length > 0 ? validated : [fallbackChunk(fileName, fileContent)];
+  const chunks = validated.length > 0 ? validated : [fallbackChunk(fileName, fileContent)];
+  return enrichTestRoles(fileName, chunks);
 }
 
 function fallbackChunk(fileName: string, content: string): IngestorChunk {
