@@ -18,7 +18,7 @@ export function buildIntegrationTestPrompt(
   diff: string,
   worktreePath: string,
   availableServices: Record<string, string>,
-  authStrategy: string,
+  authStrategy: string | undefined,
 ): string {
   const context = getContextForAgent("integration-test", repo.name);
   const serviceInfo = Object.keys(availableServices).length === 0
@@ -27,7 +27,9 @@ export function buildIntegrationTestPrompt(
 
   const authDescription = authStrategy === "mock-jwt"
     ? "Authentication uses mock JWTs for testing. Generate tokens with the test helper — no real auth server needed."
-    : `Authentication strategy: ${authStrategy}. Configure credentials as needed for the test environment.`;
+    : authStrategy
+      ? `Authentication strategy: ${authStrategy}. Configure credentials as needed for the test environment.`
+      : "No authentication strategy configured.";
 
   return `## Code Changes to Test
 

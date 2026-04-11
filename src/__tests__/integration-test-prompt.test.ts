@@ -147,6 +147,13 @@ describe("buildIntegrationTestPrompt — auth strategy", () => {
     const prompt = buildIntegrationTestPrompt(REPO, DIFF, WORKTREE, {}, "none");
     expect(prompt).toContain("Authentication strategy: none");
   });
+
+  it("renders 'No authentication strategy configured.' when authStrategy is undefined", () => {
+    const prompt = buildIntegrationTestPrompt(REPO, DIFF, WORKTREE, {}, undefined);
+    expect(prompt).toContain("No authentication strategy configured.");
+    expect(prompt).not.toContain("mock JWTs");
+    expect(prompt).not.toContain("Authentication strategy:");
+  });
 });
 
 // ---------------------------------------------------------------------------

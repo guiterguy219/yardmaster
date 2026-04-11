@@ -9,8 +9,9 @@ import { runTestQualityAgent } from "./agents/test-quality.js";
 import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
-import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 import { ingestRepo } from "./ingestor.js";
+import { runIntegrationTests } from "./integration/runner.js";
+import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 
 export interface TaskResult {
   taskId: string;
@@ -157,9 +158,29 @@ export async function executeTask(
     }
     updatePipelineStage(taskId, "test_complete");
 
-    const reviewSummaryWithTests = testResult.attempts > 0
-      ? `${loopResult.reviewSummary}\n\nTests: passed after ${testResult.attempts} attempt(s)`
-      : loopResult.reviewSummary;
+    // Run integration tests if configured
+    console.log(`  Running integration tests...`);
+    const integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
+    if (integrationResult.ran) {
+      if (!integrationResult.passed) {
+        const integrationError = `Integration tests failed after ${integrationResult.attempts} attempt(s)`;
+        updateTask(taskId, { status: "failed", error: integrationError });
+        if (issueRef) notifyFailed(issueRef, taskId, integrationError);
+        return { taskId, success: false, prUrl: null, error: integrationError };
+      }
+      updatePipelineStage(taskId, "integration_test_complete");
+      console.log(`  Integration tests passed`);
+    } else {
+      console.log(`  Integration tests skipped: ${integrationResult.output}`);
+    }
+
+    let reviewSummaryWithTests = loopResult.reviewSummary;
+    if (testResult.attempts > 0) {
+      reviewSummaryWithTests += `\n\nUnit tests: passed after ${testResult.attempts} attempt(s)`;
+    }
+    if (integrationResult.ran && integrationResult.passed) {
+      reviewSummaryWithTests += `\n\nIntegration tests: passed${integrationResult.attempts > 0 ? ` after ${integrationResult.attempts} fix attempt(s)` : ""}`;
+    }
 
     // Run browser validation if configured (best-effort)
     console.log(`  Running browser validation...`);

@@ -668,6 +668,117 @@ contextCmd
     console.log(`\nMaintenance complete.\n`);
   });
 
+// ── ym integration ─────────────────────────────────────
+const integrationCmd = program
+  .command("integration")
+  .description("Manage integration test infrastructure");
+
+integrationCmd
+  .command("setup")
+  .description("Set up integration test infrastructure for a repo")
+  .requiredOption("--repo <name>", "Repository name")
+  .action(async (opts: { repo: string }) => {
+    const config = loadConfig();
+    const repo = getRepo(config, opts.repo);
+    const { loadIntegrationConfig } = await import("./integration/config.js");
+    const { resolveSecrets } = await import("./integration/secrets.js");
+    const { startServices, isDockerAvailable } = await import("./integration/docker.js");
+    const { scaffoldIntegrationTests } = await import("./integration/scaffold.js");
+
+    const integrationConfig = loadIntegrationConfig(repo.name);
+    if (!integrationConfig) {
+      console.error(`No integration config found for ${repo.name}`);
+      console.error(`Create data/integration/${repo.name}.yml first`);
+      process.exit(1);
+    }
+
+    console.log(`\nIntegration setup for ${repo.name}\n`);
+
+    // Prompt for secrets
+    console.log("Resolving secrets...");
+    const secrets = await resolveSecrets(repo.name, integrationConfig);
+    console.log(`  ${Object.keys(secrets).length} secrets resolved\n`);
+
+    // Start Docker services
+    const hasDocker = integrationConfig.services
+      ? Object.values(integrationConfig.services).some((s) => s.type.startsWith("docker-"))
+      : false;
+    if (hasDocker) {
+      if (!isDockerAvailable()) {
+        console.error("Docker is not available. Install Docker to continue.");
+        process.exit(1);
+      }
+      console.log("Starting Docker services...");
+      const result = startServices(repo.name, integrationConfig);
+      if (result.started) {
+        console.log(`  Services ready: ${result.services.join(", ")}\n`);
+      } else {
+        console.error(`  Failed: ${result.error}`);
+        process.exit(1);
+      }
+    }
+
+    // Scaffold test utilities
+    console.log("Scaffolding test utilities...");
+    const scaffold = scaffoldIntegrationTests(repo, integrationConfig);
+    for (const f of scaffold.filesCreated) console.log(`  Created: ${f}`);
+    for (const f of scaffold.filesSkipped) console.log(`  Skipped (exists): ${f}`);
+
+    console.log(`\nSetup complete. Run 'ym integration test --repo ${repo.name}' to test.`);
+  });
+
+integrationCmd
+  .command("start")
+  .description("Start Docker services for integration tests")
+  .requiredOption("--repo <name>", "Repository name")
+  .action(async (opts: { repo: string }) => {
+    const { loadIntegrationConfig } = await import("./integration/config.js");
+    const { startServices } = await import("./integration/docker.js");
+    const integrationConfig = loadIntegrationConfig(opts.repo);
+    if (!integrationConfig) {
+      console.error(`No integration config for ${opts.repo}`);
+      process.exit(1);
+    }
+    const result = startServices(opts.repo, integrationConfig);
+    if (result.started) {
+      console.log(`Services started: ${result.services.join(", ")}`);
+    } else {
+      console.error(`Failed: ${result.error}`);
+      process.exit(1);
+    }
+  });
+
+integrationCmd
+  .command("stop")
+  .description("Stop Docker services for integration tests")
+  .requiredOption("--repo <name>", "Repository name")
+  .action(async (opts: { repo: string }) => {
+    const { stopServices } = await import("./integration/docker.js");
+    stopServices(opts.repo);
+    console.log("Services stopped");
+  });
+
+integrationCmd
+  .command("test")
+  .description("Run integration tests manually")
+  .requiredOption("--repo <name>", "Repository name")
+  .action(async (opts: { repo: string }) => {
+    const config = loadConfig();
+    const repo = getRepo(config, opts.repo);
+    const { runIntegrationTests } = await import("./integration/runner.js");
+
+    const result = await runIntegrationTests(config, repo, "manual", repo.localPath, "manual integration test run");
+    if (!result.ran) {
+      console.log(`Skipped: ${result.output}`);
+    } else if (result.passed) {
+      console.log(`Passed${result.attempts > 0 ? ` after ${result.attempts} attempts` : ""}`);
+    } else {
+      console.error(`Failed after ${result.attempts} attempts`);
+      console.error(result.output.slice(0, 500));
+      process.exit(1);
+    }
+  });
+
 // ── ym capacity ─────────────────────────────────────────
 program
   .command("capacity")

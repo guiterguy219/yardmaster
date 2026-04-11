@@ -15,7 +15,7 @@ export async function runIntegrationTestAgent(
   diff: string,
   worktreePath: string,
   availableServices: Record<string, string>,
-  authStrategy: string,
+  authStrategy: string | undefined,
 ): Promise<IntegrationTestAgentResult> {
   const prompt = buildIntegrationTestPrompt(repo, diff, worktreePath, availableServices, authStrategy);
 
