@@ -9,7 +9,12 @@ Rules:
 - If the task is already simple enough (single file change, straightforward addition), return a single sub-task that is identical to the original task.
 - Return ONLY a JSON array of sub-task objects, no markdown fencing or extra text:
   [{ "description": "what to do", "files": ["which files to touch"], "reason": "why this is a separate step" }]
-- Keep it to 5 sub-tasks or fewer. If you need more, the original task is too large.`;
+
+Sub-task count guidance:
+- STRONGLY prefer 2-3 sub-tasks. Each sub-task incurs significant overhead: a coder call, two reviewer calls, and potential revision rounds. More sub-tasks = more total agent calls and wall-clock time.
+- Batch small related changes together. A one-line import + function call does NOT need its own sub-task — combine it with the file that provides or consumes that import.
+- Only split into 4+ sub-tasks when files genuinely cannot be changed together (e.g., they have circular dependencies or the combined diff would be too large to review).
+- Each sub-task description should include specific implementation details from the task spec: exact function signatures, line numbers, code patterns to follow. Do not make the coder cross-reference a long spec — put the relevant details directly in each sub-task's description.`;
 
 export function buildPlannerPrompt(
   repo: RepoConfig,

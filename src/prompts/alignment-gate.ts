@@ -4,6 +4,8 @@ For reviewer agents: given the original task description, filter out any review 
 
 For coder agents: determine whether the work done is actually implementing what was asked, not something else entirely.
 
+IMPORTANT: A reviewer returning an empty issues array [] or a verdict of "approve" with zero issues is VALID — it means the reviewer found nothing wrong. This is aligned behavior, not a failure. Only flag reviewer output as misaligned if the issues raised are clearly off-topic or unrelated to the task.
+
 Return ONLY a JSON object with this exact shape, no markdown fencing or extra text:
 {
   "aligned": true | false,
