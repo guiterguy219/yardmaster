@@ -1,4 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { getTask } from "./db.js";
+import {
+  notifyTaskQueued,
+  notifyTaskStarted,
+  notifyTaskCompleted,
+  notifyTaskFailed,
+} from "./telegram/notify.js";
 
 /**
  * Parse an issue reference string like "org/repo#123" into its components.
@@ -82,6 +89,8 @@ export function notifyQueued(issueRef: string, taskId: string): void {
     `🤖 **Yardmaster** — Task queued\n\nTask \`${taskId}\` has been created and queued for processing.`
   );
   updateIssueLabels(issueRef, ["ym-queued"]);
+  const task = getTask(taskId);
+  if (task) notifyTaskQueued(taskId, task.repo, task.description);
 }
 
 /**
@@ -93,6 +102,8 @@ export function notifyStarted(issueRef: string, taskId: string): void {
     `🤖 **Yardmaster** — Work started\n\nTask \`${taskId}\` is now being worked on by an agent.`
   );
   updateIssueLabels(issueRef, ["ym-in-progress"], ["ym-queued"]);
+  const task = getTask(taskId);
+  if (task) notifyTaskStarted(taskId, task.repo, task.description);
 }
 
 /**
@@ -108,6 +119,8 @@ export function notifyPrCreated(
     `🤖 **Yardmaster** — PR created\n\nTask \`${taskId}\` has a pull request ready for review: ${prUrl}`
   );
   updateIssueLabels(issueRef, ["ym-pr-created"], ["ym-in-progress", "ym-queued"]);
+  const task = getTask(taskId);
+  if (task) notifyTaskCompleted(taskId, task.repo, prUrl);
 }
 
 /**
@@ -126,4 +139,6 @@ export function notifyFailed(
     `🤖 **Yardmaster** — Task failed\n\nTask \`${taskId}\` failed:\n\n\`\`\`\n${truncatedError}\n\`\`\``
   );
   updateIssueLabels(issueRef, ["ym-failed"], ["ym-in-progress", "ym-queued"]);
+  const task = getTask(taskId);
+  if (task) notifyTaskFailed(taskId, task.repo, error);
 }

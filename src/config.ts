@@ -15,6 +15,11 @@ export interface RepoConfig {
   readyPattern?: string;
 }
 
+export interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+}
+
 export interface YardmasterConfig {
   repos: RepoConfig[];
   dataDir: string;
@@ -27,6 +32,14 @@ export interface YardmasterConfig {
     reviewer: number;
     gitAgent: number;
   };
+  telegram?: TelegramConfig;
+}
+
+export function loadTelegramConfig(): TelegramConfig | undefined {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!botToken || !chatId) return undefined;
+  return { botToken, chatId };
 }
 
 const CONFIG_PATH = join(homedir(), "code", "gibson-ops", "yardmaster", "repos.json");
