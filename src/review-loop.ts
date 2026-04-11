@@ -56,13 +56,15 @@ async function applyAlignmentFilter(
   agentName: string,
   taskDescription: string,
   taskId: string,
-  round: number
+  round: number,
+  diff?: string,
 ): Promise<ReviewOutput> {
   const alignment = await checkAlignment(
     config,
     taskDescription,
     agentName,
-    JSON.stringify(parsed.issues)
+    JSON.stringify(parsed.issues),
+    diff,
   );
   logAgentRun(
     taskId,
@@ -230,7 +232,7 @@ async function runSubTaskReviewLoop(
 
       if (styleParsed.verdict !== "approve") {
         const styleBeforeCount = styleParsed.issues.length;
-        styleParsed = await applyAlignmentFilter(config, styleParsed, "style", originalTaskDescription, taskId, round);
+        styleParsed = await applyAlignmentFilter(config, styleParsed, "style", originalTaskDescription, taskId, round, diff);
         styleFilteredCount = styleBeforeCount - styleParsed.issues.length;
       }
     }
@@ -258,7 +260,7 @@ async function runSubTaskReviewLoop(
 
       if (logicParsed.verdict !== "approve") {
         const logicBeforeCount = logicParsed.issues.length;
-        logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round);
+        logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round, diff);
         logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
       }
     }
