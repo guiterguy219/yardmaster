@@ -253,7 +253,7 @@ describe("runIntegrationTests — testsWritten flag", () => {
   it("passes auth strategy from config to runIntegrationTestAgent", async () => {
     setupExecSync("diff content here", true);
     vi.mocked(loadIntegrationConfig).mockReturnValue(
-      makeIntegrationConfig({ auth: { strategy: "basic-auth" } })
+      makeIntegrationConfig({ auth: { strategy: "mock-jwt" } })
     );
     await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
     expect(runIntegrationTestAgent).toHaveBeenCalledWith(
@@ -262,7 +262,7 @@ describe("runIntegrationTests — testsWritten flag", () => {
       expect.any(String),
       WORKTREE,
       expect.any(Object),
-      "basic-auth",
+      "mock-jwt",
     );
   });
 
