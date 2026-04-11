@@ -43,27 +43,39 @@ describe("createSerenaConfig", () => {
     expect(args[projectIdx + 1]).toBe(worktree);
   });
 
-  it("writes a fresh config file each call (overwriting timestamp collision)", () => {
-    // Two rapid calls may produce the same filename (same ms + pid),
-    // but the second write still succeeds (overwrites). Verify both
-    // paths point to valid config with their respective worktree.
+  it("includes --from with the pinned serena package URL", () => {
+    configPath = createSerenaConfig("/tmp/test-worktree");
+
+    const content = JSON.parse(readFileSync(configPath, "utf-8"));
+    const args: string[] = content.mcpServers.serena.args;
+    const fromIdx = args.indexOf("--from");
+    expect(fromIdx).toBeGreaterThan(-1);
+    expect(args[fromIdx + 1]).toBe(
+      "git+https://github.com/oraios/serena@v1.0.0",
+    );
+  });
+
+  it("produces unique config files for concurrent calls", () => {
     const path1 = createSerenaConfig("/tmp/wt1");
     const path2 = createSerenaConfig("/tmp/wt2");
 
-    // The last write wins on collision; verify the file on disk is valid JSON
-    const content = JSON.parse(readFileSync(path2, "utf-8"));
-    expect(content.mcpServers.serena.args).toContain("/tmp/wt2");
+    expect(path1).not.toBe(path2);
+
+    const content1 = JSON.parse(readFileSync(path1, "utf-8"));
+    const content2 = JSON.parse(readFileSync(path2, "utf-8"));
+    expect(content1.mcpServers.serena.args).toContain("/tmp/wt1");
+    expect(content2.mcpServers.serena.args).toContain("/tmp/wt2");
 
     // Clean up
     if (existsSync(path1)) unlinkSync(path1);
-    if (path2 !== path1 && existsSync(path2)) unlinkSync(path2);
+    if (existsSync(path2)) unlinkSync(path2);
     configPath = undefined;
   });
 
   it("writes config to the system temp directory", () => {
     configPath = createSerenaConfig("/tmp/wt");
     expect(configPath.startsWith(tmpdir())).toBe(true);
-    expect(configPath).toMatch(/ym-serena-\d+-\d+\.json$/);
+    expect(configPath).toMatch(/ym-serena-[0-9a-f-]+\.json$/);
   });
 });
 
@@ -237,7 +249,7 @@ describe("coder Serena integration", () => {
 
     const opts = mockRunAgent.mock.calls[0][1];
     expect(opts.mcpConfigPath).toBeDefined();
-    expect(opts.mcpConfigPath).toMatch(/ym-serena-/);
+    expect(opts.mcpConfigPath).toMatch(/ym-serena-[0-9a-f-]+\.json/);
 
     // Config file should be cleaned up after agent completes
     expect(existsSync(opts.mcpConfigPath)).toBe(false);
