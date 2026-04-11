@@ -728,4 +728,41 @@ function formatAge(timestamp: number): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+const helperCmd = program
+  .command("helper")
+  .description("Helper utilities for authentication and integration workflows");
+
+helperCmd
+  .command("oidc-auth")
+  .requiredOption("--issuer <url>", "OIDC issuer URL")
+  .requiredOption("--client-id <id>", "OAuth client ID")
+  .option("--client-secret <secret>", "OAuth client secret (or set OIDC_CLIENT_SECRET)")
+  .requiredOption("--username <user>", "Username for resource owner password grant")
+  .option("--password <pass>", "Password (or set OIDC_PASSWORD env var)")
+  .option("--json", "Output full token response as JSON")
+  .action(async (opts: { issuer: string; clientId: string; clientSecret?: string; username: string; password?: string; json?: boolean }) => {
+    try {
+      const password = opts.password || process.env.OIDC_PASSWORD || "";
+      if (!password) {
+        throw new Error("--password or OIDC_PASSWORD required");
+      }
+      const { getOidcToken } = await import("./helpers/oidc-auth.js");
+      const result = await getOidcToken({
+        issuerUrl: opts.issuer,
+        clientId: opts.clientId,
+        clientSecret: opts.clientSecret || process.env.OIDC_CLIENT_SECRET,
+        username: opts.username,
+        password,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(result.accessToken);
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+  });
+
 program.parse();
