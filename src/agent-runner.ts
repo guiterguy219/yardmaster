@@ -39,7 +39,7 @@ export async function runAgent(
   ];
 
   const args = [
-    "-p", options.prompt,
+    "-p",
     "--output-format", "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
@@ -54,9 +54,12 @@ export async function runAgent(
   return new Promise<AgentRunResult>((resolve) => {
     const child: ChildProcess = spawn(config.claudeBinary, args, {
       cwd: options.workingDir,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, NO_COLOR: "1" },
     });
+
+    // Pipe prompt via stdin to avoid E2BIG when prompts exceed OS arg size limit
+    child.stdin!.end(options.prompt);
 
     let stdout = "";
     let stderr = "";
