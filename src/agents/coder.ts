@@ -27,7 +27,7 @@ export async function runCoder(
       systemPrompt: CODER_SYSTEM_PROMPT,
       workingDir: worktreePath,
       model: "opus",
-      timeout: config.timeouts.coder,
+      timeout: repo.coderTimeout ?? config.timeouts.coder,
       mcpConfigPath,
     });
   } finally {
