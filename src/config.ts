@@ -21,6 +21,7 @@ export interface YardmasterConfig {
   worktreeBaseDir: string;
   claudeBinary: string;
   defaultModel: string;
+  maxConcurrentAgents: number;
   timeouts: {
     coder: number;
     reviewer: number;
@@ -49,6 +50,7 @@ export function loadConfig(): YardmasterConfig {
       devPort?: number;
       readyPattern?: string;
     }>;
+    maxConcurrentAgents?: number;
   };
 
   const repos: RepoConfig[] = raw.repos.map((r) => ({
@@ -70,6 +72,7 @@ export function loadConfig(): YardmasterConfig {
     worktreeBaseDir: join(DATA_DIR, "worktrees"),
     claudeBinary: "claude",
     defaultModel: "sonnet",
+    maxConcurrentAgents: raw.maxConcurrentAgents ?? 1,
     timeouts: {
       coder: 10 * 60 * 1000,
       reviewer: 5 * 60 * 1000,
