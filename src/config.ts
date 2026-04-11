@@ -13,6 +13,7 @@ export interface RepoConfig {
   devCommand?: string;
   devPort?: number;
   readyPattern?: string;
+  useSerena?: boolean;
 }
 
 export interface YardmasterConfig {
@@ -49,6 +50,7 @@ export function loadConfig(): YardmasterConfig {
       devCommand?: string;
       devPort?: number;
       readyPattern?: string;
+      useSerena?: boolean;
     }>;
     maxConcurrentAgents?: number;
   };
@@ -64,6 +66,7 @@ export function loadConfig(): YardmasterConfig {
     devCommand: r.devCommand,
     devPort: r.devPort,
     readyPattern: r.readyPattern,
+    useSerena: r.useSerena,
   }));
 
   return {

@@ -9,6 +9,7 @@ export interface AgentRunOptions {
   allowedTools?: string[];
   model?: string;
   timeout: number;
+  mcpConfigPath?: string;
 }
 
 export interface AgentRunResult {
@@ -49,6 +50,10 @@ export async function runAgent(
 
   if (options.systemPrompt) {
     args.push("--system-prompt", options.systemPrompt);
+  }
+
+  if (options.mcpConfigPath) {
+    args.push("--mcp-config", options.mcpConfigPath);
   }
 
   return new Promise<AgentRunResult>((resolve) => {

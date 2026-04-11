@@ -104,6 +104,17 @@ function checkClaude(): boolean {
   }
 }
 
+function checkUvx(): boolean {
+  try {
+    const out = execSync("uvx --version", { stdio: "pipe" }).toString().trim();
+    pass("uvx --version", out);
+    return true;
+  } catch {
+    fail("uvx --version", "not found — install uv (https://docs.astral.sh/uv/)");
+    return false;
+  }
+}
+
 function checkRedis(): void {
   try {
     execSync("redis-cli ping", { stdio: "pipe" });
@@ -156,9 +167,17 @@ export async function runDoctor(): Promise<number> {
   console.log(bold("Redis"));
   checkRedis();
 
-  // Repos from config (warning only)
+  // Repos from config + conditional Serena check
   try {
     const config = loadConfig();
+
+    const serenaRepos = config.repos.filter((r) => r.useSerena);
+    if (serenaRepos.length > 0) {
+      console.log();
+      console.log(bold("Serena (uvx)"));
+      if (!checkUvx()) criticalFailed = true;
+    }
+
     if (config.repos.length > 0) {
       console.log();
       console.log(bold("Repos (git ls-remote)"));
