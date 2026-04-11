@@ -215,25 +215,74 @@ async function runSubTaskReviewLoop(
       logicApprovedFiles.delete(f);
     });
 
-    // Step 5: Run style reviewer (skip if all changed files already approved)
-    const styleAllApproved = changedFiles.length > 0 && changedFiles.every((f) => styleApprovedFiles.has(f));
+    // Step 5 & 6: Run style and logic reviewers
+    const skipStyle = changedFiles.length > 0 && changedFiles.every((f) => styleApprovedFiles.has(f));
+    const skipLogic = changedFiles.length > 0 && changedFiles.every((f) => logicApprovedFiles.has(f));
+
     let styleParsed: ReviewOutput;
+    let logicParsed: ReviewOutput;
     let styleFilteredCount = 0;
+    let logicFilteredCount = 0;
 
-    if (styleAllApproved) {
-      console.log(`  ${prefix} [Round ${round}] Skipping style reviewer (all changed files previously approved)`);
-      styleParsed = { verdict: "approve", issues: [] };
-    } else {
-      console.log(`  ${prefix} [Round ${round}] Running style reviewer...`);
-      const styleResult = await runStyleReviewer(config, repo, diff, worktreePath, priorContext);
+    if (!skipStyle && !skipLogic && config.maxConcurrentAgents >= 2) {
+      // Run both reviewers in parallel
+      console.log(`  ${prefix} [Round ${round}] Running style + logic reviewers in parallel...`);
+      const [styleResult, logicResult] = await Promise.all([
+        runStyleReviewer(config, repo, diff, worktreePath, priorContext),
+        runLogicReviewer(config, repo, diff, worktreePath, priorContext),
+      ]);
+
+      // Process style result
       styleParsed = parseReviewerOutput(styleResult.result);
-
       logAgentRun(taskId, "style", round, `Review diff (${diff.length} chars)`, styleResult.result.slice(0, 500), styleResult.durationMs, styleResult.success);
-
       if (styleParsed.verdict !== "approve") {
         const styleBeforeCount = styleParsed.issues.length;
         styleParsed = await applyAlignmentFilter(config, styleParsed, "style", originalTaskDescription, taskId, round, diff);
         styleFilteredCount = styleBeforeCount - styleParsed.issues.length;
+      }
+
+      // Process logic result
+      logicParsed = parseReviewerOutput(logicResult.result);
+      logAgentRun(taskId, "logic", round, `Review diff (${diff.length} chars)`, logicResult.result.slice(0, 500), logicResult.durationMs, logicResult.success);
+      if (logicParsed.verdict !== "approve") {
+        const logicBeforeCount = logicParsed.issues.length;
+        logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round, diff);
+        logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
+      }
+    } else {
+      // Sequential flow: either a reviewer is skipped or concurrency is limited
+      if (skipStyle) {
+        console.log(`  ${prefix} [Round ${round}] Skipping style reviewer (all changed files previously approved)`);
+        styleParsed = { verdict: "approve", issues: [] };
+      } else {
+        console.log(`  ${prefix} [Round ${round}] Running style reviewer...`);
+        const styleResult = await runStyleReviewer(config, repo, diff, worktreePath, priorContext);
+        styleParsed = parseReviewerOutput(styleResult.result);
+
+        logAgentRun(taskId, "style", round, `Review diff (${diff.length} chars)`, styleResult.result.slice(0, 500), styleResult.durationMs, styleResult.success);
+
+        if (styleParsed.verdict !== "approve") {
+          const styleBeforeCount = styleParsed.issues.length;
+          styleParsed = await applyAlignmentFilter(config, styleParsed, "style", originalTaskDescription, taskId, round, diff);
+          styleFilteredCount = styleBeforeCount - styleParsed.issues.length;
+        }
+      }
+
+      if (skipLogic) {
+        console.log(`  ${prefix} [Round ${round}] Skipping logic reviewer (all changed files previously approved)`);
+        logicParsed = { verdict: "approve", issues: [] };
+      } else {
+        console.log(`  ${prefix} [Round ${round}] Running logic reviewer...`);
+        const logicResult = await runLogicReviewer(config, repo, diff, worktreePath, priorContext);
+        logicParsed = parseReviewerOutput(logicResult.result);
+
+        logAgentRun(taskId, "logic", round, `Review diff (${diff.length} chars)`, logicResult.result.slice(0, 500), logicResult.durationMs, logicResult.success);
+
+        if (logicParsed.verdict !== "approve") {
+          const logicBeforeCount = logicParsed.issues.length;
+          logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round, diff);
+          logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
+        }
       }
     }
 
@@ -242,28 +291,6 @@ async function runSubTaskReviewLoop(
     }
 
     logReviewRound(taskId, round, "style", styleParsed.verdict, styleParsed.issues, diff);
-
-    // Step 6: Run logic reviewer (skip if all changed files already approved)
-    const logicAllApproved = changedFiles.length > 0 && changedFiles.every((f) => logicApprovedFiles.has(f));
-    let logicParsed: ReviewOutput;
-    let logicFilteredCount = 0;
-
-    if (logicAllApproved) {
-      console.log(`  ${prefix} [Round ${round}] Skipping logic reviewer (all changed files previously approved)`);
-      logicParsed = { verdict: "approve", issues: [] };
-    } else {
-      console.log(`  ${prefix} [Round ${round}] Running logic reviewer...`);
-      const logicResult = await runLogicReviewer(config, repo, diff, worktreePath, priorContext);
-      logicParsed = parseReviewerOutput(logicResult.result);
-
-      logAgentRun(taskId, "logic", round, `Review diff (${diff.length} chars)`, logicResult.result.slice(0, 500), logicResult.durationMs, logicResult.success);
-
-      if (logicParsed.verdict !== "approve") {
-        const logicBeforeCount = logicParsed.issues.length;
-        logicParsed = await applyAlignmentFilter(config, logicParsed, "logic", originalTaskDescription, taskId, round, diff);
-        logicFilteredCount = logicBeforeCount - logicParsed.issues.length;
-      }
-    }
 
     if (logicParsed.verdict === "approve") {
       changedFiles.forEach((f) => logicApprovedFiles.add(f));

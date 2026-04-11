@@ -1,4 +1,5 @@
 {
+  "maxConcurrentAgents": 2,
   "repos": [
     {
       "name": "shield-api",
