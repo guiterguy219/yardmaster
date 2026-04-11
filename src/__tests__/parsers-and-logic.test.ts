@@ -77,6 +77,87 @@ import { checkCapacity, recordCapacityEvent } from "../capacity.js";
 import { detectOscillation } from "../oscillation.js";
 import { logReviewRound } from "../diff-ledger.js";
 import { getDb } from "../db.js";
+import { buildAlignmentPrompt } from "../prompts/alignment-gate.js";
+
+// ---------------------------------------------------------------------------
+// 0. buildAlignmentPrompt
+// ---------------------------------------------------------------------------
+
+describe("buildAlignmentPrompt", () => {
+  const TASK = "Add an optional `diff` parameter to the alignment gate";
+  const AGENT = "style-reviewer";
+  const OUTPUT = JSON.stringify([{ issue: "missing semicolon", severity: "low" }]);
+
+  it("includes task description, agent name, and agent output", () => {
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT);
+    expect(prompt).toContain(TASK);
+    expect(prompt).toContain(AGENT);
+    expect(prompt).toContain(OUTPUT);
+  });
+
+  it("does not include a Code Diff section when diff is omitted", () => {
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT);
+    expect(prompt).not.toContain("## Code Diff");
+    expect(prompt).not.toContain("```diff");
+  });
+
+  it("does not include a Code Diff section when diff is undefined", () => {
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, undefined);
+    expect(prompt).not.toContain("## Code Diff");
+    expect(prompt).not.toContain("```diff");
+  });
+
+  it("does not include a Code Diff section when diff is an empty string", () => {
+    // Empty string is falsy — same behaviour as omitting the diff
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, "");
+    expect(prompt).not.toContain("## Code Diff");
+  });
+
+  it("includes a fenced Code Diff section when diff is provided", () => {
+    const diff = "- old line\n+ new line\n";
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, diff);
+    expect(prompt).toContain("## Code Diff (what the coder actually wrote)");
+    expect(prompt).toContain("```diff\n" + diff);
+    expect(prompt).toContain("```");
+  });
+
+  it("includes the Code Diff section before the Agent Output section", () => {
+    const diff = "- old\n+ new\n";
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, diff);
+    const diffPos = prompt.indexOf("## Code Diff");
+    const outputPos = prompt.indexOf("## Agent Output");
+    expect(diffPos).toBeGreaterThan(-1);
+    expect(outputPos).toBeGreaterThan(-1);
+    expect(diffPos).toBeLessThan(outputPos);
+  });
+
+  it("truncates diffs longer than 4000 characters", () => {
+    // Build a diff where the part after 4000 chars contains a unique sentinel
+    const filler = "x".repeat(3999); // 3999 x's, preceded by '+' = 4000 chars
+    const overflow = "OVERFLOW_SENTINEL";
+    const longDiff = "+" + filler + overflow;
+    expect(longDiff.length).toBeGreaterThan(4000);
+
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, longDiff);
+    // The first 4000 chars of the diff should be present
+    expect(prompt).toContain(longDiff.slice(0, 4000));
+    // The sentinel that appears only after the 4000-char cutoff must not be present
+    expect(prompt).not.toContain(overflow);
+  });
+
+  it("does not truncate diffs that are exactly 4000 characters", () => {
+    const exactDiff = "+" + "y".repeat(3999); // 4000 chars total
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, exactDiff);
+    expect(prompt).toContain(exactDiff);
+  });
+
+  it("still includes the Agent Output section when diff is provided", () => {
+    const diff = "- foo\n+ bar\n";
+    const prompt = buildAlignmentPrompt(TASK, AGENT, OUTPUT, diff);
+    expect(prompt).toContain("## Agent Output");
+    expect(prompt).toContain(OUTPUT);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // 1. parseAgentJson

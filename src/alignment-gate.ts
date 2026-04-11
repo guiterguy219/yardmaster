@@ -25,11 +25,12 @@ export async function checkAlignment(
   config: YardmasterConfig,
   taskDescription: string,
   agentName: string,
-  agentOutput: string
+  agentOutput: string,
+  diff?: string,
 ): Promise<AlignmentResult> {
   try {
     const result = await runAgent(config, {
-      prompt: buildAlignmentPrompt(taskDescription, agentName, agentOutput),
+      prompt: buildAlignmentPrompt(taskDescription, agentName, agentOutput, diff),
       systemPrompt: ALIGNMENT_SYSTEM_PROMPT,
       workingDir: process.cwd(),
       allowedTools: [],
