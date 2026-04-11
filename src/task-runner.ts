@@ -5,6 +5,7 @@ import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
 import { runTestLoop } from "./test-loop.js";
+import { runCoder } from "./agents/coder.js";
 import { runTestQualityAgent } from "./agents/test-quality.js";
 import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
@@ -113,21 +114,60 @@ export async function executeTask(
       return { taskId, success: false, prUrl: null, error: failError };
     }
 
-    // Run check command if configured
+    // Run check command if configured (with fix attempts)
     if (repo.checkCommand) {
       console.log(`  Running check: ${repo.checkCommand}`);
+      let checkPassed = false;
+      let checkOutput = "";
+      const MAX_CHECK_FIX_ATTEMPTS = 2;
+
+      // Initial check
       try {
-        execSync(repo.checkCommand, { cwd: worktree.path, stdio: "pipe" });
+        execSync(repo.checkCommand, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
+        checkPassed = true;
         console.log(`  Check passed`);
-        updatePipelineStage(taskId, "check_complete");
       } catch (err) {
-        const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
+        checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
         console.log(`  Check FAILED`);
-        const checkFailError = `Check failed: ${checkError.slice(0, 200)}`;
+      }
+
+      // Fix attempts if check failed
+      if (!checkPassed) {
+        for (let attempt = 1; attempt <= MAX_CHECK_FIX_ATTEMPTS; attempt++) {
+          console.log(`  Check fix attempt ${attempt}/${MAX_CHECK_FIX_ATTEMPTS}...`);
+          const fixPrompt = `${description}
+
+## Check Failures
+
+The check command \`${repo.checkCommand}\` failed. Here is the output:
+
+${checkOutput.slice(0, 4000)}
+
+Fix the code so the check passes. These are likely TypeScript type errors.`;
+
+          await runCoder(config, repo, fixPrompt, worktree.path);
+
+          console.log(`  Re-running check...`);
+          try {
+            execSync(repo.checkCommand, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
+            checkPassed = true;
+            console.log(`  Check passed after ${attempt} fix attempt(s)`);
+            break;
+          } catch (err) {
+            checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
+            console.log(`  Check FAILED`);
+          }
+        }
+      }
+
+      if (!checkPassed) {
+        const checkFailError = `Check failed after ${MAX_CHECK_FIX_ATTEMPTS} fix attempts: ${checkOutput.slice(0, 200)}`;
         updateTask(taskId, { status: "failed", error: checkFailError });
         if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
         return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
       }
+
+      updatePipelineStage(taskId, "check_complete");
     }
 
     // Run test quality agent if test command is configured
