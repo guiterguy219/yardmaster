@@ -10,7 +10,9 @@ Rules:
 - Do not add unnecessary comments, docstrings, or type annotations to unchanged code
 - Do not refactor surrounding code unless the task requires it
 - Commit nothing — the orchestrator handles git operations
-- If the task is ambiguous, make the most reasonable interpretation and proceed`;
+- If the task is ambiguous, make the most reasonable interpretation and proceed
+
+CRITICAL: Only modify code that is directly required by the task. Do NOT refactor, simplify, or rewrite existing functions that are not part of the task. If you read a file to make a specific change, leave all other functions in that file exactly as they are.`;
 
 export function buildCoderPrompt(
   repo: RepoConfig,
