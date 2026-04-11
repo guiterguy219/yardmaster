@@ -11,6 +11,7 @@ import { PRIORITY, PRIORITY_LABELS, parsePriority, type PriorityLevel } from "./
 import { scanReposForIssues } from "./issue-scanner.js";
 import { runDoctor } from "./doctor.js";
 import { onboardRepo } from "./onboarding.js";
+import { takeoverPr } from "./pr-takeover.js";
 import { detectAndMarkInterrupted, recoverInterruptedTasks } from "./recovery.js";
 import { removeOrphanedWorktrees } from "./worktree.js";
 import { ingestRepo } from "./ingestor.js";
@@ -102,6 +103,36 @@ program
     }
 
     const result = await executeTask(opts.repo, taskDescription);
+
+    console.log();
+    if (result.success) {
+      console.log(`Done. ${result.prUrl ? `PR: ${result.prUrl}` : "Completed (no PR created)"}`);
+    } else {
+      console.error(`Failed: ${result.error}`);
+      process.exit(1);
+    }
+  });
+
+// ── ym pr ───────────────────────────────────────────────
+// Take over an existing PR
+program
+  .command("pr")
+  .description("Take over an existing PR — apply review feedback and push fixes")
+  .argument("<url>", "GitHub PR URL (e.g. https://github.com/owner/repo/pull/123)")
+  .option("--description <text>", "Additional context for the agent")
+  .action(async (url: string, opts: { description?: string }) => {
+    console.log(`\nYardmaster — PR Takeover`);
+    console.log(`  PR: ${url}\n`);
+
+    const config = loadConfig();
+
+    detectAndMarkInterrupted();
+    const recovery = await recoverInterruptedTasks(config);
+    if (recovery.recovered > 0 || recovery.failed > 0) {
+      console.log(`  Recovery: ${recovery.recovered} recovered, ${recovery.failed} failed, ${recovery.skipped} skipped\n`);
+    }
+
+    const result = await takeoverPr(url);
 
     console.log();
     if (result.success) {

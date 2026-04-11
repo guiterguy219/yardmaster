@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, rmSync, mkdirSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { RepoConfig, YardmasterConfig } from "./config.js";
@@ -13,22 +13,25 @@ export interface Worktree {
 export function createWorktree(
   config: YardmasterConfig,
   repo: RepoConfig,
-  taskId: string
+  taskId: string,
+  baseBranch?: string
 ): Worktree {
   const branch = `ym/${taskId}`;
   const worktreePath = join(config.worktreeBaseDir, taskId);
+  const baseRef = baseBranch ?? repo.defaultBranch;
 
   mkdirSync(config.worktreeBaseDir, { recursive: true });
 
   // Fetch latest from remote
-  execSync(`git fetch origin ${repo.defaultBranch}`, {
+  execFileSync("git", ["fetch", "origin", baseRef], {
     cwd: repo.localPath,
     stdio: "pipe",
   });
 
-  // Create worktree branching from latest remote default
-  execSync(
-    `git worktree add "${worktreePath}" -b "${branch}" "origin/${repo.defaultBranch}"`,
+  // Create worktree branching from latest remote ref
+  execFileSync(
+    "git",
+    ["worktree", "add", worktreePath, "-b", branch, `origin/${baseRef}`],
     { cwd: repo.localPath, stdio: "pipe" }
   );
 
