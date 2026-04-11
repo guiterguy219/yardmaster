@@ -14,6 +14,7 @@ export interface RepoConfig {
   devPort?: number;
   readyPattern?: string;
   useSerena?: boolean;
+  coderTimeout?: number;
 }
 
 export interface YardmasterConfig {
@@ -51,6 +52,7 @@ export function loadConfig(): YardmasterConfig {
       devPort?: number;
       readyPattern?: string;
       useSerena?: boolean;
+      coderTimeout?: number;
     }>;
     maxConcurrentAgents?: number;
   };
@@ -67,6 +69,7 @@ export function loadConfig(): YardmasterConfig {
     devPort: r.devPort,
     readyPattern: r.readyPattern,
     useSerena: r.useSerena,
+    coderTimeout: r.coderTimeout,
   }));
 
   return {
@@ -77,7 +80,7 @@ export function loadConfig(): YardmasterConfig {
     defaultModel: "sonnet",
     maxConcurrentAgents: raw.maxConcurrentAgents ?? 1,
     timeouts: {
-      coder: 10 * 60 * 1000,
+      coder: 15 * 60 * 1000,
       reviewer: 5 * 60 * 1000,
       gitAgent: 3 * 60 * 1000,
     },
