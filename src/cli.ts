@@ -1029,6 +1029,45 @@ helperCmd
     }
   });
 
+// ── ym new ──────────────────────────────────────────────
+program
+  .command("new")
+  .description("Scaffold a new project and register it in Yardmaster.")
+  .option("--file <path>", "Project spec file (markdown or JSON). If omitted, a discovery agent infers a spec from defaults.")
+  .option("--org <org>", "GitHub org/user (overrides spec)")
+  .action(async (opts: { file?: string; org?: string }) => {
+    console.log("\nYardmaster — New Project\n");
+    const config = loadConfig();
+
+    const { runDiscovery, extractSpecFromFile } = await import("./new-project/discovery.js");
+    const { runScaffold } = await import("./new-project/scaffold.js");
+
+    let spec = opts.file
+      ? await extractSpecFromFile(config, opts.file)
+      : await runDiscovery(config);
+
+    if (opts.org) {
+      spec.githubOrg = opts.org;
+    }
+
+    if (!spec.githubOrg) {
+      console.error("Error: githubOrg is required (set in spec or pass --org).");
+      process.exit(1);
+    }
+
+    console.log(`\nProject: ${spec.displayName || spec.name}`);
+    console.log(`Platform: ${spec.platform} (${spec.framework})`);
+    console.log(`Backend: ${spec.backend || "none"}`);
+    console.log(`Path: ~/code/${spec.githubOrg}/${spec.name}\n`);
+
+    const result = await runScaffold(config, spec);
+
+    console.log(`\n✓ Project created at ${result.projectPath}`);
+    console.log(`✓ GitHub: ${result.githubUrl}`);
+    console.log(`✓ Registered in repos.json as "${spec.name}"`);
+    console.log(`\nReady for: ym task "your first feature" --repo ${spec.name}`);
+  });
+
 // ── ym telegram ─────────────────────────────────────────
 program
   .command("telegram")
