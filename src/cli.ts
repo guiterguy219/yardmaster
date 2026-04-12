@@ -897,4 +897,13 @@ helperCmd
     }
   });
 
+// ── ym telegram ─────────────────────────────────────────
+program
+  .command("telegram")
+  .description("Start the Telegram bot for querying task status, queue, and capacity via chat. Requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars.")
+  .action(async () => {
+    const { startBot } = await import("./telegram/bot.js");
+    await startBot();
+  });
+
 program.parse();

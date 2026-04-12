@@ -13,6 +13,7 @@ import { analyzeFailure } from "./failure-analysis.js";
 import { ingestRepo } from "./ingestor.js";
 import { runIntegrationTests } from "./integration/runner.js";
 import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
+import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
 
 export interface TaskResult {
   taskId: string;
@@ -60,6 +61,8 @@ export async function executeTask(
   console.log(`  Task ${taskId} created`);
   if (issueRef) {
     notifyStarted(issueRef, taskId);
+  } else {
+    notifyTaskStarted(taskId, repoName, description);
   }
 
   let worktree: Worktree | null = null;
@@ -88,6 +91,7 @@ export async function executeTask(
 
     if (loopResult.converged) {
       updatePipelineStage(taskId, "review_complete");
+      notifyPipelineStage(taskId, repoName, `Review: ${loopResult.finalVerdict} in ${loopResult.rounds} round(s)`);
     }
 
     if (!loopResult.converged) {
@@ -102,6 +106,7 @@ export async function executeTask(
       const failError = `Review loop ended without convergence: ${loopResult.finalVerdict}`;
       updateTask(taskId, { status: "failed", error: failError });
       if (issueRef) notifyFailed(issueRef, taskId, failError);
+      else notifyTaskFailed(taskId, repoName, failError);
 
       // Analyze failure pattern for self-improvement
       try {
@@ -164,10 +169,12 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         const checkFailError = `Check failed after ${MAX_CHECK_FIX_ATTEMPTS} fix attempts: ${checkOutput.slice(0, 200)}`;
         updateTask(taskId, { status: "failed", error: checkFailError });
         if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
+        else notifyTaskFailed(taskId, repoName, checkFailError);
         return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
       }
 
       updatePipelineStage(taskId, "check_complete");
+      notifyPipelineStage(taskId, repoName, `Check passed: ${repo.checkCommand}`);
     }
 
     // Run test quality agent if test command is configured
@@ -194,9 +201,11 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       const testError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
       updateTask(taskId, { status: "failed", error: testError });
       if (issueRef) notifyFailed(issueRef, taskId, testError);
+      else notifyTaskFailed(taskId, repoName, testError);
       return { taskId, success: false, prUrl: null, error: testError };
     }
     updatePipelineStage(taskId, "test_complete");
+    notifyPipelineStage(taskId, repoName, `Tests passed${testResult.attempts > 0 ? ` after ${testResult.attempts} fix attempt(s)` : ""}`);
 
     // Run integration tests if configured
     console.log(`  Running integration tests...`);
@@ -206,6 +215,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         const integrationError = `Integration tests failed after ${integrationResult.attempts} attempt(s)`;
         updateTask(taskId, { status: "failed", error: integrationError });
         if (issueRef) notifyFailed(issueRef, taskId, integrationError);
+        else notifyTaskFailed(taskId, repoName, integrationError);
         return { taskId, success: false, prUrl: null, error: integrationError };
       }
       updatePipelineStage(taskId, "integration_test_complete");
@@ -229,6 +239,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       const browserError = `Browser validation failed: ${browserResult.output.slice(0, 200)}`;
       updateTask(taskId, { status: "failed", error: browserError });
       if (issueRef) notifyFailed(issueRef, taskId, browserError);
+      else notifyTaskFailed(taskId, repoName, browserError);
       return { taskId, success: false, prUrl: null, error: browserError };
     }
     if (!browserResult.ran) {
@@ -249,6 +260,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         const finalCheckError = `Final check failed: ${checkError.slice(0, 200)}`;
         updateTask(taskId, { status: "failed", error: finalCheckError });
         if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+        else notifyTaskFailed(taskId, repoName, finalCheckError);
         return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
       }
     }
@@ -265,6 +277,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       updatePipelineStage(taskId, "pr_created");
       updateTask(taskId, { status: "completed", pr_url: gitResult.prUrl });
       if (issueRef) notifyPrCreated(issueRef, taskId, gitResult.prUrl);
+      else notifyTaskCompleted(taskId, repoName, gitResult.prUrl);
       console.log(`  PR: ${gitResult.prUrl}`);
       return { taskId, success: true, prUrl: gitResult.prUrl };
     }
@@ -275,6 +288,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         error: gitResult.error,
       });
       if (issueRef) notifyFailed(issueRef, taskId, gitResult.error);
+      else notifyTaskFailed(taskId, repoName, gitResult.error);
       return { taskId, success: false, prUrl: null, error: gitResult.error };
     }
 
@@ -293,6 +307,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
 
     updateTask(taskId, { status: "failed", error });
     if (issueRef) notifyFailed(issueRef, taskId, error);
+    else notifyTaskFailed(taskId, repoName, error);
     return { taskId, success: false, prUrl: null, error };
   } finally {
     // Clean up worktree

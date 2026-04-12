@@ -1,0 +1,33 @@
+# Yardmaster Telegram Bot — systemd service unit
+#
+# Setup instructions:
+#   1. Copy this file to /etc/systemd/system/yardmaster-telegram.service
+#   2. Fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID with real values
+#      (get a token from @BotFather on Telegram; chat ID from @userinfobot)
+#   3. Reload systemd and enable the service:
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now yardmaster-telegram.service
+#   4. Check status:
+#        sudo systemctl status yardmaster-telegram.service
+#        journalctl -u yardmaster-telegram.service -f
+
+[Unit]
+Description=Yardmaster Telegram bot
+After=network.target
+
+[Service]
+Type=simple
+User=jared
+WorkingDirectory=/home/jared/code/gibson-ops/yardmaster
+ExecStart=/home/jared/.nvm/versions/node/v22.22.2/bin/node --import tsx/esm src/cli.ts telegram
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=NO_COLOR=1
+Environment=PATH=/home/jared/.local/bin:/home/jared/.nvm/versions/node/v22.22.2/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/jared
+Environment=TELEGRAM_BOT_TOKEN=your-bot-token-here
+Environment=TELEGRAM_CHAT_ID=your-chat-id-here
+
+[Install]
+WantedBy=multi-user.target
