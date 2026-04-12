@@ -140,3 +140,123 @@ describe("loadConfig — overagePolicy", () => {
     expect(config.repos[0].overagePolicy).toBe("defer-low");
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadConfig — protectedFiles
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — protectedFiles", () => {
+  it("is undefined when not set in repos.json", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFiles).toBeUndefined();
+  });
+
+  it("loads a non-empty array from repos.json", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFiles: ["src/integration/docker.ts", "src/cli.ts"],
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFiles).toEqual(["src/integration/docker.ts", "src/cli.ts"]);
+  });
+
+  it("loads an empty array without converting it to undefined", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFiles: [],
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFiles).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadConfig — protectedFunctions
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — protectedFunctions", () => {
+  it("is undefined when not set in repos.json", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFunctions).toBeUndefined();
+  });
+
+  it("loads a function map from repos.json", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFunctions: {
+            "src/integration/docker.ts": ["buildKeycloakService", "parseJdbcUrl"],
+          },
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFunctions).toEqual({
+      "src/integration/docker.ts": ["buildKeycloakService", "parseJdbcUrl"],
+    });
+  });
+
+  it("loads a map covering multiple files", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFunctions: {
+            "src/a.ts": ["fnA"],
+            "src/b.ts": ["fnB1", "fnB2"],
+          },
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFunctions).toEqual({
+      "src/a.ts": ["fnA"],
+      "src/b.ts": ["fnB1", "fnB2"],
+    });
+  });
+
+  it("does not affect other repo fields when protectedFunctions is set", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFunctions: { "src/foo.ts": ["bar"] },
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].name).toBe("test-repo");
+    expect(config.repos[0].overagePolicy).toBe("defer-low");
+  });
+});

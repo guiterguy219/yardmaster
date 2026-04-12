@@ -16,6 +16,8 @@ export interface RepoConfig {
   useSerena?: boolean;
   coderTimeout?: number;
   overagePolicy?: OveragePolicy;
+  protectedFiles?: string[];
+  protectedFunctions?: Record<string, string[]>;
 }
 
 export type OveragePolicy = "defer-low" | "defer-normal" | "block-all" | "allow";
@@ -72,6 +74,8 @@ export function loadConfig(): YardmasterConfig {
       useSerena?: boolean;
       coderTimeout?: number;
       overagePolicy?: OveragePolicy;
+      protectedFiles?: string[];
+      protectedFunctions?: Record<string, string[]>;
     }>;
     maxConcurrentAgents?: number;
   };
@@ -90,6 +94,8 @@ export function loadConfig(): YardmasterConfig {
     useSerena: r.useSerena,
     coderTimeout: r.coderTimeout,
     overagePolicy: r.overagePolicy ?? "defer-low",
+    protectedFiles: r.protectedFiles,
+    protectedFunctions: r.protectedFunctions,
   }));
 
   return {

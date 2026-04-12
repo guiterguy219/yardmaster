@@ -15,6 +15,7 @@ import { runIntegrationTests } from "./integration/runner.js";
 import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
 import { runDiagnosticLoop } from "./diagnostician.js";
+import { checkProtectedRegressions, formatViolations } from "./protected-regressions.js";
 
 export interface TaskResult {
   taskId: string;
@@ -162,6 +163,26 @@ export async function executeTask(
         }
 
         return { taskId, success: false, prUrl: null, error: failError };
+      }
+    }
+
+    // Protected-files regression check — compare final worktree against main
+    // (three-dot diff against merge-base) and block PR if protected files or
+    // functions were modified. Prevents docker.ts-style regressions where an
+    // unrelated task accidentally rewrites load-bearing infrastructure code.
+    {
+      const regression = checkProtectedRegressions(repo, worktree.path, baseBranch);
+      if (regression.ran && regression.violations.length > 0) {
+        const summary = formatViolations(regression.violations);
+        const regressionError = `Protected regression detected: ${summary}`;
+        console.log(`  ${regressionError}`);
+        updateTask(taskId, { status: "failed", error: regressionError });
+        if (issueRef) notifyFailed(issueRef, taskId, regressionError);
+        else notifyTaskFailed(taskId, repoName, regressionError);
+        return { taskId, success: false, prUrl: null, error: regressionError };
+      }
+      if (regression.ran) {
+        updatePipelineStage(taskId, "protected_check_complete");
       }
     }
 
