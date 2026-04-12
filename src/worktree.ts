@@ -179,13 +179,37 @@ export function removeOrphanedWorktrees(
 }
 
 /**
+ * Branch name used to preserve WIP work for a failed task. The branch is
+ * pushed to `origin` so it survives worktree cleanup and can be recovered
+ * later via `ym recover <taskId>`.
+ */
+export function preserveBranchName(taskId: string): string {
+  return `ym-failed/${taskId}`;
+}
+
+export interface SaveWipResult {
+  saved: boolean;
+  method: "commit" | "stash" | "none";
+  ref?: string;
+  /** Local branch name that points at the WIP commit, if a preservation branch was created. */
+  preserveBranch?: string;
+  /** Remote ref (e.g. `origin/ym-failed/<taskId>`) when push succeeded. */
+  remoteRef?: string;
+  /** True iff the preservation branch was successfully pushed to origin. */
+  pushed?: boolean;
+}
+
+/**
  * Attempt to save any in-progress work in a worktree.
- * Commit first; only stash as fallback if commit fails.
+ * Commit first; only stash as fallback if commit fails. When a commit is made,
+ * also create a `ym-failed/<taskId>` branch and push it to origin so the work
+ * survives worktree cleanup. If the push fails, the local branch and commit
+ * are still left in place (best-effort).
  */
 export function saveWipWork(
   worktree: Worktree,
   description: string
-): { saved: boolean; method: "commit" | "stash" | "none"; ref?: string } {
+): SaveWipResult {
   const cwd = worktree.path;
 
   // Check if there are any changes
@@ -199,7 +223,31 @@ export function saveWipWork(
     execSync("git add -A", { cwd, stdio: "pipe" });
     execSync(`git commit -m "WIP: ${description}"`, { cwd, stdio: "pipe" });
     const sha = execSync("git rev-parse HEAD", { cwd, encoding: "utf-8" }).trim();
-    return { saved: true, method: "commit", ref: sha };
+
+    // Create + push a preservation branch so the work survives worktree cleanup.
+    const preserveBranch = preserveBranchName(worktree.taskId);
+    let pushed = false;
+    let remoteRef: string | undefined;
+    try {
+      // Force-create in case a stale local branch exists from a prior attempt.
+      execSync(`git branch -f "${preserveBranch}" ${sha}`, { cwd, stdio: "pipe" });
+      try {
+        execSync(`git push -u --force-with-lease origin "${preserveBranch}"`, { cwd, stdio: "pipe" });
+        pushed = true;
+        remoteRef = `origin/${preserveBranch}`;
+      } catch (err) {
+        console.log(
+          `  Warning: failed to push preservation branch ${preserveBranch}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    } catch (err) {
+      console.log(
+        `  Warning: failed to create preservation branch ${preserveBranch}: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return { saved: true, method: "commit", ref: sha };
+    }
+
+    return { saved: true, method: "commit", ref: sha, preserveBranch, pushed, remoteRef };
   } catch {
     // Commit failed (maybe empty after add, or hook failure) — try stash
     try {
