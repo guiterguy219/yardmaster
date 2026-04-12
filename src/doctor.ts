@@ -1,4 +1,7 @@
 import { execSync, execFileSync } from "node:child_process";
+import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config.js";
 import { auditTokens, ghExecEnv } from "./gh-auth.js";
 
@@ -139,9 +142,97 @@ function checkRepoRemote(org: string, repo: string, name: string): void {
   }
 }
 
+function getGitConfig(key: string, cwd?: string): string | null {
+  try {
+    const args = cwd
+      ? ["-C", cwd, "config", "--get", key]
+      : ["config", "--get", key];
+    return execFileSync("git", args, { stdio: "pipe" }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+function checkRepoGitIdentity(repoName: string, repoPath: string): boolean {
+  let ok = true;
+
+  // Check user.name: local config first, then global fallback
+  const localName = getGitConfig("user.name", repoPath);
+  const resolvedName = localName ?? getGitConfig("user.name");
+  if (resolvedName) {
+    const resolvedSource = localName ? "local" : "global";
+    pass(`${repoName} user.name`, `${resolvedName} (${resolvedSource})`);
+  } else {
+    fail(`${repoName} user.name`, "not set — run: git -C <repo> config user.name \"Your Name\"");
+    ok = false;
+  }
+
+  // Check user.email: local config first, then global fallback
+  const localEmail = getGitConfig("user.email", repoPath);
+  const resolvedEmail = localEmail ?? getGitConfig("user.email");
+  if (resolvedEmail) {
+    const resolvedSource = localEmail ? "local" : "global";
+    pass(`${repoName} user.email`, `${resolvedEmail} (${resolvedSource})`);
+  } else {
+    fail(`${repoName} user.email`, "not set — run: git -C <repo> config user.email \"you@example.com\"");
+    ok = false;
+  }
+
+  return ok;
+}
+
+function checkRepoPushCredentials(repoName: string, repoPath: string, org: string, repo: string): boolean {
+  // Test actual push access via dry-run push from within the repo directory
+  try {
+    execFileSync("git", ["-C", repoPath, "push", "--dry-run", "origin", "HEAD"], {
+      stdio: "pipe",
+      timeout: 10000,
+    });
+    pass(`${repoName} push credentials`, "git push --dry-run OK");
+  } catch (err: unknown) {
+    const msg = (err as { message?: string }).message ?? "";
+    if (msg.includes("ETIMEDOUT") || msg.includes("timed out")) {
+      warn(`${repoName} push credentials`, "timed out — check network");
+      return true; // not a definitive failure
+    }
+    fail(
+      `${repoName} push credentials`,
+      "cannot reach origin — verify SSH key or HTTPS credentials",
+    );
+    return false;
+  }
+
+  // If credential.useHttpPath is enabled, check for per-repo entries in .git-credentials
+  const useHttpPath = getGitConfig("credential.useHttpPath", repoPath)
+    ?? getGitConfig("credential.useHttpPath");
+  if (useHttpPath === "true") {
+    const credFile = join(homedir(), ".git-credentials");
+    if (existsSync(credFile)) {
+      const contents = readFileSync(credFile, "utf-8");
+      // .git-credentials format: https://user:token@github.com/org/repo
+      const pattern = new RegExp(`github\\.com/${org}/${repo}(\\.git)?\\b`);
+      if (pattern.test(contents)) {
+        pass(`${repoName} credential.useHttpPath`, `per-repo entry found for ${org}/${repo}`);
+      } else {
+        warn(
+          `${repoName} credential.useHttpPath`,
+          `credential.useHttpPath=true but no entry for ${org}/${repo} in ~/.git-credentials`,
+        );
+      }
+    } else {
+      warn(
+        `${repoName} credential.useHttpPath`,
+        "credential.useHttpPath=true but ~/.git-credentials not found",
+      );
+    }
+  }
+
+  return true;
+}
+
 function checkGhTokens(orgs: string[]): boolean {
   const uniqueOrgs = [...new Set(orgs)];
-  const { configured, missing } = auditTokens(uniqueOrgs);
+  const { configured = [], missing = [] } = auditTokens(uniqueOrgs) ?? {};
 
   for (const org of configured) {
     // Validate the token actually works
@@ -213,6 +304,22 @@ export async function runDoctor(): Promise<number> {
       console.log(bold("Repos (git ls-remote)"));
       for (const repo of config.repos) {
         checkRepoRemote(repo.githubOrg, repo.githubRepo, repo.name);
+      }
+
+      console.log();
+      console.log(bold("Per-repo git identity"));
+      for (const repo of config.repos) {
+        if (!checkRepoGitIdentity(repo.name, repo.localPath)) {
+          criticalFailed = true;
+        }
+      }
+
+      console.log();
+      console.log(bold("Per-repo push credentials"));
+      for (const repo of config.repos) {
+        if (!checkRepoPushCredentials(repo.name, repo.localPath, repo.githubOrg, repo.githubRepo)) {
+          criticalFailed = true;
+        }
       }
     }
   } catch {
