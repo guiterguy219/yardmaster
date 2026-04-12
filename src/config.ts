@@ -33,6 +33,8 @@ export interface YardmasterConfig {
     coder: number;
     reviewer: number;
     gitAgent: number;
+    diagnostician: number;
+    diagnosticianEscalated: number;
   };
   telegram?: TelegramConfig;
 }
@@ -96,6 +98,8 @@ export function loadConfig(): YardmasterConfig {
       coder: 15 * 60 * 1000,
       reviewer: 5 * 60 * 1000,
       gitAgent: 3 * 60 * 1000,
+      diagnostician: 3 * 60 * 1000,
+      diagnosticianEscalated: 5 * 60 * 1000,
     },
   };
 }

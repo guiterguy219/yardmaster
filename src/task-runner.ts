@@ -14,6 +14,7 @@ import { ingestRepo } from "./ingestor.js";
 import { runIntegrationTests } from "./integration/runner.js";
 import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
+import { runDiagnosticLoop } from "./diagnostician.js";
 
 export interface TaskResult {
   taskId: string;
@@ -26,16 +27,19 @@ export interface ExecuteTaskOptions {
   issueRef?: string;
   baseBranch?: string;
   targetBranch?: string;
+  noDiagnose?: boolean;
 }
 
 export async function executeTask(
   repoName: string,
-  description: string,
+  initialDescription: string,
   options: ExecuteTaskOptions = {}
 ): Promise<TaskResult> {
-  const { issueRef, baseBranch, targetBranch } = options;
+  const { issueRef, baseBranch, targetBranch, noDiagnose } = options;
   const config = loadConfig();
   const repo = getRepo(config, repoName);
+  let description = initialDescription;
+  const diagnosticAttempted = new Set<string>();
 
   // Check capacity before starting
   const capacity = checkCapacity();
@@ -83,7 +87,7 @@ export async function executeTask(
 
     // Run review loop (coder + reviewers)
     console.log(`  Running review loop...`);
-    const loopResult = await runReviewLoop(config, repo, taskId, worktree.path, description);
+    let loopResult = await runReviewLoop(config, repo, taskId, worktree.path, description);
 
     console.log(
       `  Review loop complete: ${loopResult.finalVerdict} after ${loopResult.rounds} round(s)`
@@ -95,28 +99,70 @@ export async function executeTask(
     }
 
     if (!loopResult.converged) {
-      // Try to save WIP work
-      if (worktree) {
-        const wip = saveWipWork(worktree, description);
-        if (wip.saved) {
-          console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
-        }
-      }
-
       const failError = `Review loop ended without convergence: ${loopResult.finalVerdict}`;
-      updateTask(taskId, { status: "failed", error: failError });
-      if (issueRef) notifyFailed(issueRef, taskId, failError);
-      else notifyTaskFailed(taskId, repoName, failError);
 
-      // Analyze failure pattern for self-improvement
-      try {
-        const category = await analyzeFailure(taskId, description, failError, loopResult.reviewSummary);
-        console.log(`  Failure classified as: ${category}`);
-      } catch {
-        // Best effort
+      // Run diagnostician before giving up
+      if (!noDiagnose && !diagnosticAttempted.has("review_loop") && worktree) {
+        diagnosticAttempted.add("review_loop");
+        const diagResult = await runDiagnosticLoop(
+          config, repo, taskId, worktree.path, "review_loop", failError, description
+        );
+        if (diagResult.recovered) {
+          if (diagResult.action === "retry_with_spec" && diagResult.newSpec) {
+            console.log(`  Retrying review loop with rewritten spec...`);
+            description = diagResult.newSpec;
+          } else {
+            console.log(`  Retrying review loop...`);
+          }
+          const retryResult = await runReviewLoop(config, repo, taskId, worktree.path, description);
+          if (retryResult.converged) {
+            console.log(`  Review loop converged on retry after diagnosis`);
+            updatePipelineStage(taskId, "review_complete");
+            notifyPipelineStage(taskId, repoName, `Review: ${retryResult.finalVerdict} in ${retryResult.rounds} round(s) (after diagnostic retry)`);
+            loopResult = retryResult;
+          }
+          // If retry also failed, fall through to failure handling below
+          if (!retryResult.converged) {
+            const retryError = `Review loop failed on diagnostic retry: ${retryResult.finalVerdict}`;
+            if (worktree) {
+              const wip = saveWipWork(worktree, description);
+              if (wip.saved) console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+            }
+            updateTask(taskId, { status: "failed", error: retryError });
+            if (issueRef) notifyFailed(issueRef, taskId, retryError);
+            else notifyTaskFailed(taskId, repoName, retryError);
+            return { taskId, success: false, prUrl: null, error: retryError };
+          }
+        } else {
+          // Diagnostician couldn't recover
+          if (worktree) {
+            const wip = saveWipWork(worktree, description);
+            if (wip.saved) console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+          }
+          updateTask(taskId, { status: "failed", error: `${failError} — ${diagResult.diagnosis}` });
+          if (issueRef) notifyFailed(issueRef, taskId, failError);
+          else notifyTaskFailed(taskId, repoName, failError);
+          return { taskId, success: false, prUrl: null, error: failError };
+        }
+      } else {
+        // No diagnosis — original behavior
+        if (worktree) {
+          const wip = saveWipWork(worktree, description);
+          if (wip.saved) console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+        }
+        updateTask(taskId, { status: "failed", error: failError });
+        if (issueRef) notifyFailed(issueRef, taskId, failError);
+        else notifyTaskFailed(taskId, repoName, failError);
+
+        try {
+          const category = await analyzeFailure(taskId, description, failError, loopResult.reviewSummary);
+          console.log(`  Failure classified as: ${category}`);
+        } catch {
+          // Best effort
+        }
+
+        return { taskId, success: false, prUrl: null, error: failError };
       }
-
-      return { taskId, success: false, prUrl: null, error: failError };
     }
 
     // Run check command if configured (with fix attempts)
@@ -167,10 +213,30 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
 
       if (!checkPassed) {
         const checkFailError = `Check failed after ${MAX_CHECK_FIX_ATTEMPTS} fix attempts: ${checkOutput.slice(0, 200)}`;
-        updateTask(taskId, { status: "failed", error: checkFailError });
-        if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
-        else notifyTaskFailed(taskId, repoName, checkFailError);
-        return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
+
+        if (!noDiagnose && !diagnosticAttempted.has("check_command") && worktree) {
+          diagnosticAttempted.add("check_command");
+          const diagResult = await runDiagnosticLoop(
+            config, repo, taskId, worktree.path, "check_command", checkFailError, description
+          );
+          if (diagResult.recovered) {
+            console.log(`  Retrying check after diagnosis...`);
+            try {
+              execSync(repo.checkCommand!, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
+              checkPassed = true;
+              console.log(`  Check passed after diagnostic fix`);
+            } catch {
+              console.log(`  Check still fails after diagnostic fix`);
+            }
+          }
+        }
+
+        if (!checkPassed) {
+          updateTask(taskId, { status: "failed", error: checkFailError });
+          if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
+          else notifyTaskFailed(taskId, repoName, checkFailError);
+          return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
+        }
       }
 
       updatePipelineStage(taskId, "check_complete");
@@ -196,27 +262,57 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
     }
 
     // Run test loop if configured
-    const testResult = await runTestLoop(config, repo, taskId, worktree.path, description);
+    let testResult = await runTestLoop(config, repo, taskId, worktree.path, description);
     if (!testResult.passed) {
       const testError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
-      updateTask(taskId, { status: "failed", error: testError });
-      if (issueRef) notifyFailed(issueRef, taskId, testError);
-      else notifyTaskFailed(taskId, repoName, testError);
-      return { taskId, success: false, prUrl: null, error: testError };
+
+      if (!noDiagnose && !diagnosticAttempted.has("test_loop") && worktree) {
+        diagnosticAttempted.add("test_loop");
+        const diagResult = await runDiagnosticLoop(
+          config, repo, taskId, worktree.path, "test_loop", testError, description
+        );
+        if (diagResult.recovered) {
+          console.log(`  Retrying test loop after diagnosis...`);
+          testResult = await runTestLoop(config, repo, taskId, worktree.path, description);
+        }
+      }
+
+      if (!testResult.passed) {
+        const finalTestError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
+        updateTask(taskId, { status: "failed", error: finalTestError });
+        if (issueRef) notifyFailed(issueRef, taskId, finalTestError);
+        else notifyTaskFailed(taskId, repoName, finalTestError);
+        return { taskId, success: false, prUrl: null, error: finalTestError };
+      }
     }
     updatePipelineStage(taskId, "test_complete");
     notifyPipelineStage(taskId, repoName, `Tests passed${testResult.attempts > 0 ? ` after ${testResult.attempts} fix attempt(s)` : ""}`);
 
     // Run integration tests if configured
     console.log(`  Running integration tests...`);
-    const integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
+    let integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
     if (integrationResult.ran) {
       if (!integrationResult.passed) {
         const integrationError = `Integration tests failed after ${integrationResult.attempts} attempt(s)`;
-        updateTask(taskId, { status: "failed", error: integrationError });
-        if (issueRef) notifyFailed(issueRef, taskId, integrationError);
-        else notifyTaskFailed(taskId, repoName, integrationError);
-        return { taskId, success: false, prUrl: null, error: integrationError };
+
+        if (!noDiagnose && !diagnosticAttempted.has("integration_tests") && worktree) {
+          diagnosticAttempted.add("integration_tests");
+          const diagResult = await runDiagnosticLoop(
+            config, repo, taskId, worktree.path, "integration_tests", integrationError, description
+          );
+          if (diagResult.recovered) {
+            console.log(`  Retrying integration tests after diagnosis...`);
+            integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
+          }
+        }
+
+        if (!integrationResult.passed) {
+          const finalIntError = `Integration tests failed after ${integrationResult.attempts} attempt(s)`;
+          updateTask(taskId, { status: "failed", error: finalIntError });
+          if (issueRef) notifyFailed(issueRef, taskId, finalIntError);
+          else notifyTaskFailed(taskId, repoName, finalIntError);
+          return { taskId, success: false, prUrl: null, error: finalIntError };
+        }
       }
       updatePipelineStage(taskId, "integration_test_complete");
       console.log(`  Integration tests passed`);
@@ -237,10 +333,36 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
     const browserResult = await runBrowserValidation(config, repo, worktree.path);
     if (browserResult.ran && !browserResult.passed) {
       const browserError = `Browser validation failed: ${browserResult.output.slice(0, 200)}`;
-      updateTask(taskId, { status: "failed", error: browserError });
-      if (issueRef) notifyFailed(issueRef, taskId, browserError);
-      else notifyTaskFailed(taskId, repoName, browserError);
-      return { taskId, success: false, prUrl: null, error: browserError };
+
+      if (!noDiagnose && !diagnosticAttempted.has("browser_validation") && worktree) {
+        diagnosticAttempted.add("browser_validation");
+        const diagResult = await runDiagnosticLoop(
+          config, repo, taskId, worktree.path, "browser_validation", browserError, description
+        );
+        if (diagResult.recovered) {
+          console.log(`  Retrying browser validation after diagnosis...`);
+          const retryBrowser = await runBrowserValidation(config, repo, worktree.path);
+          if (retryBrowser.ran && retryBrowser.passed) {
+            console.log(`  Browser validation passed on retry`);
+          } else if (retryBrowser.ran && !retryBrowser.passed) {
+            const retryBrowserError = `Browser validation failed after diagnostic retry: ${retryBrowser.output.slice(0, 200)}`;
+            updateTask(taskId, { status: "failed", error: retryBrowserError });
+            if (issueRef) notifyFailed(issueRef, taskId, retryBrowserError);
+            else notifyTaskFailed(taskId, repoName, retryBrowserError);
+            return { taskId, success: false, prUrl: null, error: retryBrowserError };
+          }
+        } else {
+          updateTask(taskId, { status: "failed", error: browserError });
+          if (issueRef) notifyFailed(issueRef, taskId, browserError);
+          else notifyTaskFailed(taskId, repoName, browserError);
+          return { taskId, success: false, prUrl: null, error: browserError };
+        }
+      } else {
+        updateTask(taskId, { status: "failed", error: browserError });
+        if (issueRef) notifyFailed(issueRef, taskId, browserError);
+        else notifyTaskFailed(taskId, repoName, browserError);
+        return { taskId, success: false, prUrl: null, error: browserError };
+      }
     }
     if (!browserResult.ran) {
       console.log(`  Browser validation skipped: ${browserResult.output}`);
@@ -258,10 +380,36 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
         console.log(`  Final check FAILED`);
         const finalCheckError = `Final check failed: ${checkError.slice(0, 200)}`;
-        updateTask(taskId, { status: "failed", error: finalCheckError });
-        if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
-        else notifyTaskFailed(taskId, repoName, finalCheckError);
-        return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+
+        if (!noDiagnose && !diagnosticAttempted.has("final_check") && worktree) {
+          diagnosticAttempted.add("final_check");
+          const diagResult = await runDiagnosticLoop(
+            config, repo, taskId, worktree.path, "final_check", finalCheckError, description
+          );
+          if (diagResult.recovered) {
+            console.log(`  Retrying final check after diagnosis...`);
+            try {
+              execSync(repo.checkCommand!, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
+              console.log(`  Final check passed after diagnostic fix`);
+            } catch {
+              console.log(`  Final check still fails after diagnostic fix`);
+              updateTask(taskId, { status: "failed", error: finalCheckError });
+              if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+              else notifyTaskFailed(taskId, repoName, finalCheckError);
+              return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+            }
+          } else {
+            updateTask(taskId, { status: "failed", error: finalCheckError });
+            if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+            else notifyTaskFailed(taskId, repoName, finalCheckError);
+            return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+          }
+        } else {
+          updateTask(taskId, { status: "failed", error: finalCheckError });
+          if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+          else notifyTaskFailed(taskId, repoName, finalCheckError);
+          return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+        }
       }
     }
 
@@ -283,6 +431,25 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
     }
 
     if (gitResult.error) {
+      if (!noDiagnose && !diagnosticAttempted.has("commit_push") && worktree) {
+        diagnosticAttempted.add("commit_push");
+        const diagResult = await runDiagnosticLoop(
+          config, repo, taskId, worktree.path, "commit_push", gitResult.error, description
+        );
+        if (diagResult.recovered) {
+          console.log(`  Retrying commit/push after diagnosis...`);
+          const retryGit = commitAndPush(repo, worktree, description, reviewSummaryWithTests, targetBranch);
+          if (retryGit.prUrl) {
+            updatePipelineStage(taskId, "pr_created");
+            updateTask(taskId, { status: "completed", pr_url: retryGit.prUrl });
+            if (issueRef) notifyPrCreated(issueRef, taskId, retryGit.prUrl);
+            else notifyTaskCompleted(taskId, repoName, retryGit.prUrl);
+            console.log(`  PR: ${retryGit.prUrl}`);
+            return { taskId, success: true, prUrl: retryGit.prUrl };
+          }
+        }
+      }
+
       updateTask(taskId, {
         status: gitResult.committed ? "partial" : "failed",
         error: gitResult.error,
@@ -296,6 +463,21 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
     return { taskId, success: true, prUrl: null };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+
+    // Run diagnostician on unexpected errors
+    if (!noDiagnose && !diagnosticAttempted.has("unexpected_error") && worktree) {
+      diagnosticAttempted.add("unexpected_error");
+      try {
+        const diagResult = await runDiagnosticLoop(
+          config, repo, taskId, worktree.path, "unexpected_error", error, description
+        );
+        if (diagResult.recovered) {
+          console.log(`  Diagnostician applied fixes for unexpected error — manual retry recommended`);
+        }
+      } catch {
+        // Best effort — don't let diagnostician errors mask the original error
+      }
+    }
 
     // Try to save WIP work on unexpected errors
     if (worktree) {

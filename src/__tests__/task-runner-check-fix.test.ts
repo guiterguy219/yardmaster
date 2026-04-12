@@ -87,6 +87,10 @@ vi.mock("../browser-validation.js", () => ({
   runBrowserValidation: vi.fn().mockResolvedValue({ ran: false, passed: false, output: "not configured" }),
 }));
 
+vi.mock("../diagnostician.js", () => ({
+  runDiagnosticLoop: vi.fn().mockResolvedValue({ recovered: false, diagnosis: "test", action: "give_up" }),
+}));
+
 vi.mock("../agents/git-agent.js", () => ({
   commitAndPush: vi.fn().mockReturnValue({ committed: true, prUrl: "https://github.com/acme/repo/pull/1", error: null }),
 }));
@@ -128,7 +132,7 @@ function makeConfig(): YardmasterConfig {
     claudeBinary: "claude",
     defaultModel: "sonnet",
     maxConcurrentAgents: 1,
-    timeouts: { coder: 60_000, reviewer: 60_000, gitAgent: 60_000 },
+    timeouts: { coder: 60_000, reviewer: 60_000, gitAgent: 60_000, diagnostician: 180_000, diagnosticianEscalated: 300_000 },
   };
 }
 

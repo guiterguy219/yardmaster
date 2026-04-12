@@ -141,7 +141,7 @@ describe("agent-runner MCP config", () => {
       repos: [],
       maxConcurrentAgents: 1,
       worktreeBaseDir: "/tmp/worktrees",
-      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000 },
+      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000, diagnostician: 180000, diagnosticianEscalated: 300000 },
     };
 
     await runAgent(config, {
@@ -182,7 +182,7 @@ describe("agent-runner MCP config", () => {
       repos: [],
       maxConcurrentAgents: 1,
       worktreeBaseDir: "/tmp/worktrees",
-      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000 },
+      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000, diagnostician: 180000, diagnosticianEscalated: 300000 },
     };
 
     await runAgent(config, {
@@ -234,7 +234,7 @@ describe("coder Serena integration", () => {
       repos: [],
       maxConcurrentAgents: 1,
       worktreeBaseDir: "/tmp/worktrees",
-      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000 },
+      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000, diagnostician: 180000, diagnosticianEscalated: 300000 },
     };
     const repo = {
       name: "test",
@@ -278,7 +278,7 @@ describe("coder Serena integration", () => {
       repos: [],
       maxConcurrentAgents: 1,
       worktreeBaseDir: "/tmp/worktrees",
-      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000 },
+      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000, diagnostician: 180000, diagnosticianEscalated: 300000 },
     };
     const repo = {
       name: "test",
@@ -313,7 +313,7 @@ describe("coder Serena integration", () => {
       repos: [],
       maxConcurrentAgents: 1,
       worktreeBaseDir: "/tmp/worktrees",
-      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000 },
+      timeouts: { coder: 600000, reviewer: 300000, gitAgent: 180000, diagnostician: 180000, diagnosticianEscalated: 300000 },
     };
     const repo = {
       name: "test",
