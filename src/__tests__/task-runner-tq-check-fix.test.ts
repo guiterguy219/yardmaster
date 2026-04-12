@@ -87,7 +87,7 @@ vi.mock("../agents/test-quality.js", () => ({
 }));
 
 vi.mock("../integration/runner.js", () => ({
-  runIntegrationTests: vi.fn().mockResolvedValue({ ran: false, passed: false, attempts: 0, output: "not configured" }),
+  runIntegrationPipeline: vi.fn().mockResolvedValue({ ran: false, passed: false, attempts: 0, output: "not configured" }),
 }));
 
 vi.mock("../browser-validation.js", () => ({

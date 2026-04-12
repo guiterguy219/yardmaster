@@ -6,18 +6,9 @@ import { startServices, stopServices, isDockerAvailable } from "./docker.js";
 import { scaffoldIntegrationTests } from "./scaffold.js";
 import { runIntegrationTestAgent } from "../agents/integration-test.js";
 import { runCoder } from "../agents/coder.js";
+import { getExecOutput } from "./exec-utils.js";
 
 const MAX_FIX_ATTEMPTS = 2;
-
-function getExecOutput(err: unknown): string {
-  if (err && typeof err === "object") {
-    const e = err as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
-    if (e.stderr) return e.stderr.toString();
-    if (e.stdout) return e.stdout.toString();
-    if (e.message) return e.message;
-  }
-  return String(err);
-}
 
 export interface IntegrationTestResult {
   ran: boolean;
@@ -25,6 +16,21 @@ export interface IntegrationTestResult {
   testsWritten: boolean;
   output: string;
   attempts: number;
+}
+
+/**
+ * Top-level entry point used by the task pipeline. Dispatches to the
+ * declared integration strategy.
+ */
+export async function runIntegrationPipeline(
+  config: YardmasterConfig,
+  repo: RepoConfig,
+  taskId: string,
+  worktreePath: string,
+  description: string,
+) {
+  const { runIntegrationStrategy } = await import("./strategies/index.js");
+  return runIntegrationStrategy(config, repo, taskId, worktreePath, description);
 }
 
 export async function runIntegrationTests(

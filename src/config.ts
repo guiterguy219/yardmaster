@@ -18,9 +18,29 @@ export interface RepoConfig {
   overagePolicy?: OveragePolicy;
   protectedFiles?: string[];
   protectedFunctions?: Record<string, string[]>;
+  integrationStrategy?: IntegrationStrategy;
+  integrationTestCommand?: string;
+  smokeCommand?: string;
+  smokeTimeoutMs?: number;
+  buildCommand?: string;
 }
 
 export type OveragePolicy = "defer-low" | "defer-normal" | "block-all" | "allow";
+
+export type IntegrationStrategy =
+  | "full-docker"
+  | "test-suite"
+  | "smoke"
+  | "self-exec"
+  | "ask-agent";
+
+export const INTEGRATION_STRATEGIES: readonly IntegrationStrategy[] = [
+  "full-docker",
+  "test-suite",
+  "smoke",
+  "self-exec",
+  "ask-agent",
+];
 
 export interface TelegramConfig {
   botToken: string;
@@ -76,27 +96,54 @@ export function loadConfig(): YardmasterConfig {
       overagePolicy?: OveragePolicy;
       protectedFiles?: string[];
       protectedFunctions?: Record<string, string[]>;
+      integrationStrategy?: IntegrationStrategy;
+      integrationTestCommand?: string;
+      smokeCommand?: string;
+      smokeTimeoutMs?: number;
+      buildCommand?: string;
     }>;
     maxConcurrentAgents?: number;
   };
 
-  const repos: RepoConfig[] = raw.repos.map((r) => ({
-    name: r.name,
-    localPath: resolve(r.path.replace("~", homedir())),
-    githubOrg: r.org,
-    githubRepo: r.repo,
-    defaultBranch: r.branch ?? "main",
-    checkCommand: r.checkCommand,
-    testCommand: r.testCommand,
-    devCommand: r.devCommand,
-    devPort: r.devPort,
-    readyPattern: r.readyPattern,
-    useSerena: r.useSerena,
-    coderTimeout: r.coderTimeout,
-    overagePolicy: r.overagePolicy ?? "defer-low",
-    protectedFiles: r.protectedFiles,
-    protectedFunctions: r.protectedFunctions,
-  }));
+  const repos: RepoConfig[] = raw.repos.map((r) => {
+    let integrationStrategy = r.integrationStrategy;
+    if (integrationStrategy && !INTEGRATION_STRATEGIES.includes(integrationStrategy)) {
+      throw new Error(
+        `Invalid integrationStrategy "${integrationStrategy}" for repo "${r.name}". ` +
+          `Must be one of: ${INTEGRATION_STRATEGIES.join(", ")}`
+      );
+    }
+    if (!integrationStrategy) {
+      // Safe fallback that forces clarity — agents must request guidance before proceeding.
+      console.warn(
+        `  [config] repo "${r.name}" has no integrationStrategy — defaulting to "ask-agent". ` +
+          `Set integrationStrategy in repos.json (one of: ${INTEGRATION_STRATEGIES.join(", ")}).`
+      );
+      integrationStrategy = "ask-agent";
+    }
+    return {
+      name: r.name,
+      localPath: resolve(r.path.replace("~", homedir())),
+      githubOrg: r.org,
+      githubRepo: r.repo,
+      defaultBranch: r.branch ?? "main",
+      checkCommand: r.checkCommand,
+      testCommand: r.testCommand,
+      devCommand: r.devCommand,
+      devPort: r.devPort,
+      readyPattern: r.readyPattern,
+      useSerena: r.useSerena,
+      coderTimeout: r.coderTimeout,
+      overagePolicy: r.overagePolicy ?? "defer-low",
+      protectedFiles: r.protectedFiles,
+      protectedFunctions: r.protectedFunctions,
+      integrationStrategy,
+      integrationTestCommand: r.integrationTestCommand,
+      smokeCommand: r.smokeCommand,
+      smokeTimeoutMs: r.smokeTimeoutMs,
+      buildCommand: r.buildCommand,
+    };
+  });
 
   return {
     repos,

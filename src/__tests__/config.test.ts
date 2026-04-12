@@ -260,3 +260,86 @@ describe("loadConfig — protectedFunctions", () => {
     expect(config.repos[0].overagePolicy).toBe("defer-low");
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadConfig — integrationStrategy
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — integrationStrategy", () => {
+  it("defaults to 'ask-agent' when integrationStrategy is absent", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    const config = loadConfig();
+    expect(config.repos[0].integrationStrategy).toBe("ask-agent");
+  });
+
+  it("emits a console.warn when integrationStrategy is absent", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    loadConfig();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ask-agent"));
+    warnSpy.mockRestore();
+  });
+
+  it.each(["full-docker", "test-suite", "smoke", "self-exec", "ask-agent"] as const)(
+    "accepts valid strategy '%s'",
+    (strategy) => {
+      const raw = {
+        repos: [{ name: "r", path: "~/r", org: "o", repo: "r", integrationStrategy: strategy }],
+      };
+      mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+      const config = loadConfig();
+      expect(config.repos[0].integrationStrategy).toBe(strategy);
+    },
+  );
+
+  it("throws on an invalid integrationStrategy value", () => {
+    const raw = {
+      repos: [{ name: "r", path: "~/r", org: "o", repo: "r", integrationStrategy: "nonexistent" }],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    expect(() => loadConfig()).toThrow(/Invalid integrationStrategy/);
+  });
+
+  it("includes the invalid value and repo name in the error message", () => {
+    const raw = {
+      repos: [{ name: "my-repo", path: "~/r", org: "o", repo: "r", integrationStrategy: "bad-value" }],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    expect(() => loadConfig()).toThrow(/bad-value/);
+  });
+
+  it("passes through integrationTestCommand, smokeCommand, smokeTimeoutMs, buildCommand", () => {
+    const raw = {
+      repos: [
+        {
+          name: "r",
+          path: "~/r",
+          org: "o",
+          repo: "r",
+          integrationStrategy: "smoke",
+          integrationTestCommand: "npm run test:e2e",
+          smokeCommand: "node dist/cli.js --help",
+          smokeTimeoutMs: 30_000,
+          buildCommand: "npm run build",
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    const repo = config.repos[0];
+    expect(repo.integrationTestCommand).toBe("npm run test:e2e");
+    expect(repo.smokeCommand).toBe("node dist/cli.js --help");
+    expect(repo.smokeTimeoutMs).toBe(30_000);
+    expect(repo.buildCommand).toBe("npm run build");
+  });
+
+  it("leaves new fields undefined when absent from repos.json", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    const config = loadConfig();
+    const repo = config.repos[0];
+    expect(repo.integrationTestCommand).toBeUndefined();
+    expect(repo.smokeCommand).toBeUndefined();
+    expect(repo.smokeTimeoutMs).toBeUndefined();
+    expect(repo.buildCommand).toBeUndefined();
+  });
+});

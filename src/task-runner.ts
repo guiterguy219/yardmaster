@@ -11,8 +11,8 @@ import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
 import { ingestRepo } from "./ingestor.js";
-import { runIntegrationTests } from "./integration/runner.js";
-import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
+import { runIntegrationPipeline as runIntegrationStrategy } from "./integration/runner.js";
+import { notifyStarted, notifyPrCreated, notifyFailed, commentOnIssue, updateIssueLabels } from "./issue-lifecycle.js";
 import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
 import { runDiagnosticLoop } from "./diagnostician.js";
 import { checkProtectedRegressions, formatViolations } from "./protected-regressions.js";
@@ -353,9 +353,34 @@ ${tqCheckOutput.slice(0, 4000)}`;
     updatePipelineStage(taskId, "test_complete");
     notifyPipelineStage(taskId, repoName, `Tests passed${testResult.attempts > 0 ? ` after ${testResult.attempts} fix attempt(s)` : ""}`);
 
-    // Run integration tests if configured
-    console.log(`  Running integration tests...`);
-    let integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
+    // Run integration tests via declared strategy. Integration coverage is
+    // required, not opt-in: a repo with no declared strategy defaults to
+    // `ask-agent`, which halts here and files a clarification rather than
+    // silently shipping with no integration check.
+    console.log(`  Running integration tests (strategy=${repo.integrationStrategy ?? "ask-agent"})...`);
+    let integrationResult = await runIntegrationStrategy(config, repo, taskId, worktree.path, description);
+
+    if (integrationResult.needsClarification) {
+      const questions = integrationResult.clarificationQuestions ?? [];
+      const clarificationError =
+        `INTEGRATION_STRATEGY_UNCLEAR: ${integrationResult.output}\n\n` +
+        questions.map((q) => `- ${q}`).join("\n");
+      console.log(`  ${clarificationError}`);
+      if (issueRef) {
+        commentOnIssue(
+          issueRef,
+          `🤖 **Yardmaster** — INTEGRATION_STRATEGY_UNCLEAR\n\n` +
+            `Cannot proceed without an integration strategy for this repo.\n\n` +
+            questions.map((q) => `- ${q}`).join("\n")
+        );
+        updateIssueLabels(issueRef, ["ym-needs-clarification"], ["ym-in-progress"]);
+      }
+      updateTask(taskId, { status: "failed", error: clarificationError });
+      if (issueRef) notifyFailed(issueRef, taskId, clarificationError);
+      else notifyTaskFailed(taskId, repoName, clarificationError);
+      return { taskId, success: false, prUrl: null, error: clarificationError };
+    }
+
     if (integrationResult.ran) {
       if (!integrationResult.passed) {
         const integrationError = `Integration tests failed after ${integrationResult.attempts} attempt(s)`;
@@ -367,7 +392,7 @@ ${tqCheckOutput.slice(0, 4000)}`;
           );
           if (diagResult.recovered) {
             console.log(`  Retrying integration tests after diagnosis...`);
-            integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
+            integrationResult = await runIntegrationStrategy(config, repo, taskId, worktree.path, description);
           }
         }
 
