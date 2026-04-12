@@ -60,7 +60,8 @@ program
   .argument("[description]", "What the agent should do")
   .requiredOption("--repo <name>", "Target repository name (from repos.json)")
   .option("--file <path>", "Read task description from a file (recommended for complex, multi-paragraph specs)")
-  .action(async (description: string | undefined, opts: { repo: string; file?: string }) => {
+  .option("--no-diagnose", "Skip the diagnostician agent on failure")
+  .action(async (description: string | undefined, opts: { repo: string; file?: string; diagnose: boolean }) => {
     const taskDescription = resolveDescription(description, opts.file);
 
     console.log(`\nYardmaster — Task (P0 immediate)`);
@@ -103,7 +104,9 @@ program
       console.log();
     }
 
-    const result = await executeTask(opts.repo, taskDescription);
+    const result = await executeTask(opts.repo, taskDescription, {
+      noDiagnose: !opts.diagnose,
+    });
 
     console.log();
     if (result.success) {

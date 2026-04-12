@@ -109,7 +109,7 @@ function makeConfig(maxConcurrentAgents: number): YardmasterConfig {
     claudeBinary: "claude",
     defaultModel: "sonnet",
     maxConcurrentAgents,
-    timeouts: { coder: 60_000, reviewer: 60_000, gitAgent: 60_000 },
+    timeouts: { coder: 60_000, reviewer: 60_000, gitAgent: 60_000, diagnostician: 180_000, diagnosticianEscalated: 300_000 },
   };
 }
 

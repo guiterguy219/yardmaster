@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { loadConfig, getRepo, type RepoConfig } from "./config.js";
+import { loadConfig, getRepo, type YardmasterConfig, type RepoConfig } from "./config.js";
 import { createTask, updateTask, updatePipelineStage } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
@@ -13,6 +13,9 @@ import { analyzeFailure } from "./failure-analysis.js";
 import { ingestRepo } from "./ingestor.js";
 import { runIntegrationTests } from "./integration/runner.js";
 import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
+import { runDiagnosticLoop } from "./diagnostician.js";
+
+const MAX_CHECK_FIX_ATTEMPTS = 2;
 
 export interface TaskResult {
   taskId: string;
@@ -25,6 +28,7 @@ export interface ExecuteTaskOptions {
   issueRef?: string;
   baseBranch?: string;
   targetBranch?: string;
+  noDiagnose?: boolean;
 }
 
 export async function executeTask(
@@ -32,7 +36,7 @@ export async function executeTask(
   description: string,
   options: ExecuteTaskOptions = {}
 ): Promise<TaskResult> {
-  const { issueRef, baseBranch, targetBranch } = options;
+  const { issueRef, baseBranch, targetBranch, noDiagnose } = options;
   const config = loadConfig();
   const repo = getRepo(config, repoName);
 
@@ -63,6 +67,36 @@ export async function executeTask(
   }
 
   let worktree: Worktree | null = null;
+  let diagnosticAttempted = false;
+  let activeDescription = description;
+
+  /**
+   * Attempt diagnosis on a pipeline failure. Returns true if the task was
+   * recovered and the caller should retry from the appropriate stage.
+   */
+  async function diagnose(
+    stage: string,
+    error: string
+  ): Promise<{ recovered: boolean; newSpec?: string }> {
+    if (diagnosticAttempted || noDiagnose || !worktree) return { recovered: false };
+    diagnosticAttempted = true;
+
+    try {
+      const diagResult = await runDiagnosticLoop(
+        config, repo, taskId, worktree.path, stage, error, activeDescription
+      );
+      if (diagResult.recovered) {
+        if (diagResult.newSpec) {
+          activeDescription = diagResult.newSpec;
+          return { recovered: true, newSpec: diagResult.newSpec };
+        }
+        return { recovered: true };
+      }
+    } catch (diagErr) {
+      console.log(`  [Diagnostician] Error: ${diagErr instanceof Error ? diagErr.message : String(diagErr)}`);
+    }
+    return { recovered: false };
+  }
 
   try {
     // Create worktree
@@ -78,20 +112,28 @@ export async function executeTask(
     const ingestResult = await ingestRepo(config, repoName, repo.localPath);
     console.log(`  Ingested ${ingestResult.filesChanged}/${ingestResult.filesScanned} files, ${ingestResult.chunksUpserted} chunks, ${ingestResult.depsUpserted} deps`);
 
-    // Run review loop (coder + reviewers)
-    console.log(`  Running review loop...`);
-    const loopResult = await runReviewLoop(config, repo, taskId, worktree.path, description);
+    // ── Review loop ──────────────────────────────────────
+    // May run twice: once normally, once if diagnostician provides retry_with_spec
+    let reviewConverged = false;
+    let reviewSummary = "";
 
-    console.log(
-      `  Review loop complete: ${loopResult.finalVerdict} after ${loopResult.rounds} round(s)`
-    );
+    for (let reviewAttempt = 0; reviewAttempt < 2; reviewAttempt++) {
+      console.log(`  Running review loop...`);
+      const loopResult = await runReviewLoop(config, repo, taskId, worktree.path, activeDescription);
 
-    if (loopResult.converged) {
-      updatePipelineStage(taskId, "review_complete");
-    }
+      console.log(
+        `  Review loop complete: ${loopResult.finalVerdict} after ${loopResult.rounds} round(s)`
+      );
 
-    if (!loopResult.converged) {
-      // Try to save WIP work
+      reviewSummary = loopResult.reviewSummary;
+
+      if (loopResult.converged) {
+        updatePipelineStage(taskId, "review_complete");
+        reviewConverged = true;
+        break;
+      }
+
+      // Review didn't converge — attempt diagnosis
       if (worktree) {
         const wip = saveWipWork(worktree, description);
         if (wip.saved) {
@@ -100,12 +142,20 @@ export async function executeTask(
       }
 
       const failError = `Review loop ended without convergence: ${loopResult.finalVerdict}`;
+
+      const recovery = await diagnose("review_loop", failError);
+      if (recovery.recovered) {
+        // Diagnostician fixed something or rewrote the spec — retry the review loop
+        console.log(`  [Diagnostician] Retrying review loop...`);
+        continue;
+      }
+
+      // Not recovered — fail the task
       updateTask(taskId, { status: "failed", error: failError });
       if (issueRef) notifyFailed(issueRef, taskId, failError);
 
-      // Analyze failure pattern for self-improvement
       try {
-        const category = await analyzeFailure(taskId, description, failError, loopResult.reviewSummary);
+        const category = await analyzeFailure(taskId, activeDescription, failError, loopResult.reviewSummary);
         console.log(`  Failure classified as: ${category}`);
       } catch {
         // Best effort
@@ -114,63 +164,42 @@ export async function executeTask(
       return { taskId, success: false, prUrl: null, error: failError };
     }
 
-    // Run check command if configured (with fix attempts)
+    if (!reviewConverged) {
+      const failError = "Review loop did not converge after diagnostic retry";
+      updateTask(taskId, { status: "failed", error: failError });
+      if (issueRef) notifyFailed(issueRef, taskId, failError);
+      return { taskId, success: false, prUrl: null, error: failError };
+    }
+
+    // ── Check command ────────────────────────────────────
     if (repo.checkCommand) {
-      console.log(`  Running check: ${repo.checkCommand}`);
-      let checkPassed = false;
-      let checkOutput = "";
-      const MAX_CHECK_FIX_ATTEMPTS = 2;
+      const checkResult = await runCheckWithFixes(config, repo, worktree.path, activeDescription);
 
-      // Initial check
-      try {
-        execSync(repo.checkCommand, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
-        checkPassed = true;
-        console.log(`  Check passed`);
-      } catch (err) {
-        checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
-        console.log(`  Check FAILED`);
-      }
-
-      // Fix attempts if check failed
-      if (!checkPassed) {
-        for (let attempt = 1; attempt <= MAX_CHECK_FIX_ATTEMPTS; attempt++) {
-          console.log(`  Check fix attempt ${attempt}/${MAX_CHECK_FIX_ATTEMPTS}...`);
-          const fixPrompt = `${description}
-
-## Check Failures
-
-The check command \`${repo.checkCommand}\` failed. Here is the output:
-
-${checkOutput.slice(0, 4000)}
-
-Fix the code so the check passes. These are likely TypeScript type errors.`;
-
-          await runCoder(config, repo, fixPrompt, worktree.path);
-
-          console.log(`  Re-running check...`);
+      if (!checkResult.passed) {
+        const checkFailError = `Check failed after ${MAX_CHECK_FIX_ATTEMPTS} fix attempts: ${checkResult.output.slice(0, 200)}`;
+        const recovery = await diagnose("check_command", checkFailError);
+        if (recovery.recovered) {
+          // Diagnostician fixed env issue — re-run check once
+          console.log(`  [Diagnostician] Retrying check command...`);
           try {
             execSync(repo.checkCommand, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
-            checkPassed = true;
-            console.log(`  Check passed after ${attempt} fix attempt(s)`);
-            break;
-          } catch (err) {
-            checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
-            console.log(`  Check FAILED`);
+            console.log(`  Check passed after diagnostic fix`);
+          } catch {
+            updateTask(taskId, { status: "failed", error: checkFailError });
+            if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
+            return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
           }
+        } else {
+          updateTask(taskId, { status: "failed", error: checkFailError });
+          if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
+          return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
         }
-      }
-
-      if (!checkPassed) {
-        const checkFailError = `Check failed after ${MAX_CHECK_FIX_ATTEMPTS} fix attempts: ${checkOutput.slice(0, 200)}`;
-        updateTask(taskId, { status: "failed", error: checkFailError });
-        if (issueRef) notifyFailed(issueRef, taskId, checkFailError);
-        return { taskId, success: false, prUrl: null, error: `Check command failed: ${repo.checkCommand}` };
       }
 
       updatePipelineStage(taskId, "check_complete");
     }
 
-    // Run test quality agent if test command is configured
+    // ── Test quality agent ───────────────────────────────
     if (repo.testCommand) {
       console.log(`  Staging files for test quality analysis...`);
       execSync("git add -A", { cwd: worktree.path, stdio: "pipe" });
@@ -188,25 +217,47 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       }
     }
 
-    // Run test loop if configured
-    const testResult = await runTestLoop(config, repo, taskId, worktree.path, description);
+    // ── Test loop ────────────────────────────────────────
+    const testResult = await runTestLoop(config, repo, taskId, worktree.path, activeDescription);
     if (!testResult.passed) {
       const testError = `Tests failed after ${testResult.attempts} fix attempt(s)`;
-      updateTask(taskId, { status: "failed", error: testError });
-      if (issueRef) notifyFailed(issueRef, taskId, testError);
-      return { taskId, success: false, prUrl: null, error: testError };
+      const recovery = await diagnose("test_loop", testError);
+      if (recovery.recovered) {
+        console.log(`  [Diagnostician] Retrying test loop...`);
+        const retryTestResult = await runTestLoop(config, repo, taskId, worktree.path, activeDescription);
+        if (!retryTestResult.passed) {
+          updateTask(taskId, { status: "failed", error: testError });
+          if (issueRef) notifyFailed(issueRef, taskId, testError);
+          return { taskId, success: false, prUrl: null, error: testError };
+        }
+      } else {
+        updateTask(taskId, { status: "failed", error: testError });
+        if (issueRef) notifyFailed(issueRef, taskId, testError);
+        return { taskId, success: false, prUrl: null, error: testError };
+      }
     }
     updatePipelineStage(taskId, "test_complete");
 
-    // Run integration tests if configured
+    // ── Integration tests ────────────────────────────────
     console.log(`  Running integration tests...`);
-    const integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, description);
+    const integrationResult = await runIntegrationTests(config, repo, taskId, worktree.path, activeDescription);
     if (integrationResult.ran) {
       if (!integrationResult.passed) {
         const integrationError = `Integration tests failed after ${integrationResult.attempts} attempt(s)`;
-        updateTask(taskId, { status: "failed", error: integrationError });
-        if (issueRef) notifyFailed(issueRef, taskId, integrationError);
-        return { taskId, success: false, prUrl: null, error: integrationError };
+        const recovery = await diagnose("integration_tests", integrationError);
+        if (recovery.recovered) {
+          console.log(`  [Diagnostician] Retrying integration tests...`);
+          const retryIntResult = await runIntegrationTests(config, repo, taskId, worktree.path, activeDescription);
+          if (!retryIntResult.passed) {
+            updateTask(taskId, { status: "failed", error: integrationError });
+            if (issueRef) notifyFailed(issueRef, taskId, integrationError);
+            return { taskId, success: false, prUrl: null, error: integrationError };
+          }
+        } else {
+          updateTask(taskId, { status: "failed", error: integrationError });
+          if (issueRef) notifyFailed(issueRef, taskId, integrationError);
+          return { taskId, success: false, prUrl: null, error: integrationError };
+        }
       }
       updatePipelineStage(taskId, "integration_test_complete");
       console.log(`  Integration tests passed`);
@@ -214,7 +265,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       console.log(`  Integration tests skipped: ${integrationResult.output}`);
     }
 
-    let reviewSummaryWithTests = loopResult.reviewSummary;
+    let reviewSummaryWithTests = reviewSummary;
     if (testResult.attempts > 0) {
       reviewSummaryWithTests += `\n\nUnit tests: passed after ${testResult.attempts} attempt(s)`;
     }
@@ -222,14 +273,18 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       reviewSummaryWithTests += `\n\nIntegration tests: passed${integrationResult.attempts > 0 ? ` after ${integrationResult.attempts} fix attempt(s)` : ""}`;
     }
 
-    // Run browser validation if configured (best-effort)
+    // ── Browser validation ───────────────────────────────
     console.log(`  Running browser validation...`);
     const browserResult = await runBrowserValidation(config, repo, worktree.path);
     if (browserResult.ran && !browserResult.passed) {
       const browserError = `Browser validation failed: ${browserResult.output.slice(0, 200)}`;
-      updateTask(taskId, { status: "failed", error: browserError });
-      if (issueRef) notifyFailed(issueRef, taskId, browserError);
-      return { taskId, success: false, prUrl: null, error: browserError };
+      const recovery = await diagnose("browser_validation", browserError);
+      if (!recovery.recovered) {
+        updateTask(taskId, { status: "failed", error: browserError });
+        if (issueRef) notifyFailed(issueRef, taskId, browserError);
+        return { taskId, success: false, prUrl: null, error: browserError };
+      }
+      // If recovered, proceed — the fix was environmental
     }
     if (!browserResult.ran) {
       console.log(`  Browser validation skipped: ${browserResult.output}`);
@@ -237,7 +292,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       console.log(`  Browser validation passed`);
     }
 
-    // Final check before PR — catches type errors from test quality agent, integration tests, etc.
+    // ── Final check ──────────────────────────────────────
     if (repo.checkCommand) {
       console.log(`  Final check: ${repo.checkCommand}`);
       try {
@@ -247,15 +302,29 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
         console.log(`  Final check FAILED`);
         const finalCheckError = `Final check failed: ${checkError.slice(0, 200)}`;
-        updateTask(taskId, { status: "failed", error: finalCheckError });
-        if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
-        return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+
+        const recovery = await diagnose("final_check", finalCheckError);
+        if (recovery.recovered) {
+          console.log(`  [Diagnostician] Retrying final check...`);
+          try {
+            execSync(repo.checkCommand, { cwd: worktree.path, stdio: "pipe" });
+            console.log(`  Final check passed after diagnostic fix`);
+          } catch {
+            updateTask(taskId, { status: "failed", error: finalCheckError });
+            if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+            return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+          }
+        } else {
+          updateTask(taskId, { status: "failed", error: finalCheckError });
+          if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
+          return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+        }
       }
     }
 
-    // Commit, push, and create PR
+    // ── Commit, push, and create PR ──────────────────────
     console.log(`  Creating PR...`);
-    const gitResult = commitAndPush(repo, worktree, description, reviewSummaryWithTests, targetBranch);
+    const gitResult = commitAndPush(repo, worktree, activeDescription, reviewSummaryWithTests, targetBranch);
 
     if (gitResult.committed) {
       updatePipelineStage(taskId, "committed");
@@ -270,6 +339,19 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
     }
 
     if (gitResult.error) {
+      const recovery = await diagnose("git_push", gitResult.error);
+      if (recovery.recovered) {
+        console.log(`  [Diagnostician] Retrying commit and push...`);
+        const retryGitResult = commitAndPush(repo, worktree, activeDescription, reviewSummaryWithTests, targetBranch);
+        if (retryGitResult.prUrl) {
+          updatePipelineStage(taskId, "pr_created");
+          updateTask(taskId, { status: "completed", pr_url: retryGitResult.prUrl });
+          if (issueRef) notifyPrCreated(issueRef, taskId, retryGitResult.prUrl);
+          console.log(`  PR: ${retryGitResult.prUrl}`);
+          return { taskId, success: true, prUrl: retryGitResult.prUrl };
+        }
+      }
+
       updateTask(taskId, {
         status: gitResult.committed ? "partial" : "failed",
         error: gitResult.error,
@@ -282,6 +364,15 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
     return { taskId, success: true, prUrl: null };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+
+    // Attempt diagnosis on unexpected errors (before saving WIP)
+    if (worktree) {
+      const recovery = await diagnose("unexpected_error", error);
+      if (recovery.recovered) {
+        // Can't meaningfully retry from an unexpected error — log diagnosis and fail
+        console.log(`  [Diagnostician] Diagnosed unexpected error but cannot auto-retry`);
+      }
+    }
 
     // Try to save WIP work on unexpected errors
     if (worktree) {
@@ -305,4 +396,56 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
       }
     }
   }
+}
+
+/**
+ * Run the check command with up to 2 coder fix attempts.
+ * Extracted to keep the main pipeline readable.
+ */
+async function runCheckWithFixes(
+  config: YardmasterConfig,
+  repo: RepoConfig,
+  worktreePath: string,
+  description: string
+): Promise<{ passed: boolean; output: string }> {
+  console.log(`  Running check: ${repo.checkCommand}`);
+  let checkOutput = "";
+
+  // Initial check
+  try {
+    execSync(repo.checkCommand!, { cwd: worktreePath, encoding: "utf-8", stdio: "pipe" });
+    console.log(`  Check passed`);
+    return { passed: true, output: "" };
+  } catch (err) {
+    checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
+    console.log(`  Check FAILED`);
+  }
+
+  // Fix attempts
+  for (let attempt = 1; attempt <= MAX_CHECK_FIX_ATTEMPTS; attempt++) {
+    console.log(`  Check fix attempt ${attempt}/${MAX_CHECK_FIX_ATTEMPTS}...`);
+    const fixPrompt = `${description}
+
+## Check Failures
+
+The check command \`${repo.checkCommand}\` failed. Here is the output:
+
+${checkOutput.slice(0, 4000)}
+
+Fix the code so the check passes. These are likely TypeScript type errors.`;
+
+    await runCoder(config, repo, fixPrompt, worktreePath);
+
+    console.log(`  Re-running check...`);
+    try {
+      execSync(repo.checkCommand!, { cwd: worktreePath, encoding: "utf-8", stdio: "pipe" });
+      console.log(`  Check passed after ${attempt} fix attempt(s)`);
+      return { passed: true, output: "" };
+    } catch (err) {
+      checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
+      console.log(`  Check FAILED`);
+    }
+  }
+
+  return { passed: false, output: checkOutput };
 }
