@@ -1,3 +1,6 @@
+export const MS_PER_MINUTE = 60_000;
+export const ONE_HOUR_MS = 3_600_000;
+
 // Priority levels: lower number = higher priority (P0 is immediate, P4 is background)
 export const PRIORITY = {
   IMMEDIATE: 0,

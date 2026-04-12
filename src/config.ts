@@ -15,7 +15,10 @@ export interface RepoConfig {
   readyPattern?: string;
   useSerena?: boolean;
   coderTimeout?: number;
+  overagePolicy?: OveragePolicy;
 }
+
+export type OveragePolicy = "defer-low" | "defer-normal" | "block-all" | "allow";
 
 export interface TelegramConfig {
   botToken: string;
@@ -68,6 +71,7 @@ export function loadConfig(): YardmasterConfig {
       readyPattern?: string;
       useSerena?: boolean;
       coderTimeout?: number;
+      overagePolicy?: OveragePolicy;
     }>;
     maxConcurrentAgents?: number;
   };
@@ -85,6 +89,7 @@ export function loadConfig(): YardmasterConfig {
     readyPattern: r.readyPattern,
     useSerena: r.useSerena,
     coderTimeout: r.coderTimeout,
+    overagePolicy: r.overagePolicy ?? "defer-low",
   }));
 
   return {
