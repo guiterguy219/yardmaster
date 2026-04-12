@@ -7,6 +7,7 @@ import { runReviewLoop } from "./review-loop.js";
 import { runTestLoop } from "./test-loop.js";
 import { runCoder } from "./agents/coder.js";
 import { runTestQualityAgent } from "./agents/test-quality.js";
+import { verifyCheckOrFix } from "./agents/verify-check.js";
 import { runBrowserValidation } from "./browser-validation.js";
 import { commitAndPush } from "./agents/git-agent.js";
 import { analyzeFailure } from "./failure-analysis.js";
@@ -280,23 +281,14 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
           updatePipelineStage(taskId, "tests_written");
 
           // Run check command (if configured) to catch type errors in newly-written tests.
-          // Feed any failures back to the test-quality agent so it can fix them before
-          // the final gate. This prevents broken tests from killing the task downstream.
-          if (repo.checkCommand) {
-            const MAX_TQ_FIX_ATTEMPTS = 2;
-            let tqCheckPassed = false;
-            let tqCheckOutput = "";
-
-            try {
-              execSync(repo.checkCommand, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
-              tqCheckPassed = true;
-            } catch (err) {
-              tqCheckOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
-              console.log(`  Test quality check FAILED — tests have type errors`);
-            }
-
-            for (let attempt = 1; !tqCheckPassed && attempt <= MAX_TQ_FIX_ATTEMPTS; attempt++) {
-              console.log(`  Test quality fix attempt ${attempt}/${MAX_TQ_FIX_ATTEMPTS}...`);
+          // Soft-fail: if the helper exhausts retries the final check gate downstream
+          // will catch any remaining errors.
+          const tqWorktreePath = worktree.path;
+          const tqCheck = await verifyCheckOrFix(
+            repo,
+            tqWorktreePath,
+            "test-quality",
+            async (errorOutput) => {
               const fixPrompt = `${description}
 
 ## Test Type Errors
@@ -305,22 +297,13 @@ The tests just written produced TypeScript errors when running \`${repo.checkCom
 
 ## Check Output
 
-${tqCheckOutput.slice(0, 4000)}`;
-              await runCoder(config, repo, fixPrompt, worktree.path);
-              execSync("git add -A", { cwd: worktree.path, stdio: "pipe" });
-
-              try {
-                execSync(repo.checkCommand, { cwd: worktree.path, encoding: "utf-8", stdio: "pipe" });
-                tqCheckPassed = true;
-                console.log(`  Test quality check passed after ${attempt} fix attempt(s)`);
-              } catch (err) {
-                tqCheckOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
-              }
-            }
-
-            if (!tqCheckPassed) {
-              console.log(`  Test quality check still failing after ${MAX_TQ_FIX_ATTEMPTS} attempts — final check will catch it`);
-            }
+${errorOutput.slice(0, 4000)}`;
+              await runCoder(config, repo, fixPrompt, tqWorktreePath);
+              execSync("git add -A", { cwd: tqWorktreePath, stdio: "pipe" });
+            },
+          );
+          if (!tqCheck.passed && !tqCheck.skipped) {
+            console.log(`  Test quality check still failing after ${tqCheck.attempts} attempts — final check will catch it`);
           }
         }
       }

@@ -14,7 +14,8 @@ Rules:
 - Keep tests focused and minimal — test the change, not the entire module
 - Tests MUST type-check under the project's tsconfig — Read the actual exported types/signatures from the source files before writing tests, do not guess
 - Avoid \`as any\` and \`@ts-ignore\` escape hatches; if a strict-mode project requires them, the test is wrong
-- Verify import paths against the current file layout (modules may have been renamed or moved in the diff)`;
+- Verify import paths against the current file layout (modules may have been renamed or moved in the diff)
+- Your work is NOT complete until the repo's check command (e.g. \`tsc --noEmit\`) passes. Run it before finishing. If it fails, fix the test files and re-run. Do not finish with unresolved type errors.`;
 
 export function buildTestQualityPrompt(
   repo: RepoConfig,

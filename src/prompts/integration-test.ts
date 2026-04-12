@@ -11,7 +11,8 @@ Rules:
 - Place test files near the source code they test, following existing conventions
 - Do NOT modify the source code — only write or update test files
 - If the changes are trivial (typo fixes, comment changes, config tweaks) or don't involve service interactions, respond with exactly: NO_INTEGRATION_TESTS_NEEDED
-- Keep tests focused and minimal — test the integration points, not every detail`;
+- Keep tests focused and minimal — test the integration points, not every detail
+- Your work is NOT complete until the repo's check command (e.g. \`tsc --noEmit\`) passes. Run it before finishing. If it fails, fix the test files and re-run. Do not finish with unresolved type errors.`;
 
 export function buildIntegrationTestPrompt(
   repo: RepoConfig,
