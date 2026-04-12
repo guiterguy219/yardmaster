@@ -1,7 +1,15 @@
-import { Worker, type Job } from "bullmq";
+import { Worker, DelayedError, type Job } from "bullmq";
 import { REDIS_CONNECTION, QUEUE_NAME } from "./connection.js";
-import { PRIORITY_LABELS, type PriorityLevel } from "./constants.js";
+import {
+  PRIORITY,
+  PRIORITY_LABELS,
+  MS_PER_MINUTE,
+  ONE_HOUR_MS,
+  type PriorityLevel,
+} from "./constants.js";
 import { executeTask } from "../task-runner.js";
+import { checkCapacity } from "../capacity.js";
+import { loadConfig, getRepo } from "../config.js";
 
 interface TaskJobData {
   repo: string;
@@ -15,7 +23,7 @@ interface TaskJobData {
 export function startWorker(): Worker {
   const worker = new Worker(
     QUEUE_NAME,
-    async (job: Job<TaskJobData>) => {
+    async (job: Job<TaskJobData>, token?: string) => {
       const { repo, description, priority, source, issueRef } = job.data;
       const label = PRIORITY_LABELS[priority] ?? `P${priority}`;
 
@@ -25,6 +33,34 @@ export function startWorker(): Worker {
       console.log(`  Repo: ${repo}`);
       console.log(`  Task: ${description.slice(0, 100)}${description.length > 100 ? "..." : ""}`);
       if (issueRef) console.log(`  Issue: ${issueRef}`);
+
+      // Capacity gate: defer the job back to the queue if overage policy applies.
+      // P0 (immediate) jobs always bypass the capacity check.
+      if (priority !== PRIORITY.IMMEDIATE) {
+        let overagePolicy;
+        try {
+          const config = loadConfig();
+          const repoConfig = getRepo(config, repo);
+          overagePolicy = repoConfig.overagePolicy;
+        } catch (err) {
+          console.log(
+            `  Capacity check skipped: could not resolve repo config (${(err as Error).message})`
+          );
+        }
+        const status = checkCapacity(priority, overagePolicy);
+        if (!status.canProceed) {
+          if (status.reason === "overage-deferred") {
+            const resumeAt = status.resetsAt?.getTime() ?? Date.now() + ONE_HOUR_MS;
+            const delay = Math.max(0, resumeAt - Date.now());
+            console.log(
+              `  Deferred: Job ${job.id} (overage, ${label}) — re-queued in ${Math.round(delay / MS_PER_MINUTE)}min`
+            );
+            await job.moveToDelayed(Date.now() + delay, token);
+            throw new DelayedError();
+          }
+          throw new Error(status.reason ?? "Capacity check failed");
+        }
+      }
 
       const result = await executeTask(repo, description, { issueRef });
 

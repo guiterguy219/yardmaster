@@ -58,3 +58,85 @@ describe("loadConfig — maxConcurrentAgents", () => {
     expect(config.repos[0].name).toBe("test-repo");
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadConfig — overagePolicy
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — overagePolicy", () => {
+  it("defaults overagePolicy to 'defer-low' when absent from repos.json", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    const config = loadConfig();
+    expect(config.repos[0].overagePolicy).toBe("defer-low");
+  });
+
+  it("reads an explicit 'block-all' overagePolicy from repos.json", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          overagePolicy: "block-all",
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].overagePolicy).toBe("block-all");
+  });
+
+  it("reads an explicit 'defer-normal' overagePolicy from repos.json", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          overagePolicy: "defer-normal",
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].overagePolicy).toBe("defer-normal");
+  });
+
+  it("reads an explicit 'allow' overagePolicy from repos.json", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          overagePolicy: "allow",
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].overagePolicy).toBe("allow");
+  });
+
+  it("does not affect other repo fields when overagePolicy is set", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          overagePolicy: "defer-low",
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].name).toBe("test-repo");
+    expect(config.repos[0].githubOrg).toBe("acme");
+    expect(config.repos[0].overagePolicy).toBe("defer-low");
+  });
+});

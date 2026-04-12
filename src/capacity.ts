@@ -1,4 +1,6 @@
 import { getDb } from "./db.js";
+import type { OveragePolicy } from "./config.js";
+import { PRIORITY, type PriorityLevel } from "./queue/constants.js";
 
 export interface CapacityEvent {
   resetsAt: number | null;
@@ -22,7 +24,7 @@ export function recordCapacityEvent(event: CapacityEvent): void {
     .run(event.resetsAt, event.rateLimitType, event.isUsingOverage ? 1 : 0);
 }
 
-export function checkCapacity(): CapacityStatus {
+export function checkCapacity(priority?: PriorityLevel, overagePolicy?: OveragePolicy): CapacityStatus {
   const db = getDb();
 
   // Get the most recent capacity event
@@ -65,8 +67,34 @@ export function checkCapacity(): CapacityStatus {
     };
   }
 
-  // If using overage, warn but allow (user can configure stricter policy later)
+  // If using overage, apply policy (P0 always passes regardless of policy)
   if (isUsingOverage) {
+    const policy: OveragePolicy = overagePolicy ?? "defer-low";
+    const isP0 = priority === PRIORITY.IMMEDIATE;
+    // Default undefined priority to NORMAL so deferral policies still apply
+    const effectivePriority: PriorityLevel = priority ?? PRIORITY.NORMAL;
+
+    let block = false;
+    if (!isP0) {
+      if (policy === "block-all") {
+        block = true;
+      } else if (policy === "defer-normal") {
+        block = effectivePriority >= PRIORITY.NORMAL;
+      } else if (policy === "defer-low") {
+        block = effectivePriority >= PRIORITY.LOW;
+      }
+      // "allow" → never blocks
+    }
+
+    if (block) {
+      return {
+        canProceed: false,
+        isUsingOverage: true,
+        resetsAt,
+        reason: "overage-deferred",
+      };
+    }
+
     return {
       canProceed: true,
       isUsingOverage: true,

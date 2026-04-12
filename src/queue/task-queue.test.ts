@@ -6,7 +6,7 @@ vi.mock("./connection.js", () => ({
   QUEUE_NAME: "yardmaster-test",
 }));
 
-import { parsePriority, toBullMQPriority, PRIORITY } from "./constants.js";
+import { parsePriority, toBullMQPriority, PRIORITY, MS_PER_MINUTE, ONE_HOUR_MS } from "./constants.js";
 import {
   enqueueTask,
   getQueueContents,
@@ -44,6 +44,20 @@ describe("parsePriority", () => {
   it("defaults to NORMAL for unknown input", () => {
     expect(parsePriority("unknown")).toBe(PRIORITY.NORMAL);
     expect(parsePriority("")).toBe(PRIORITY.NORMAL);
+  });
+});
+
+describe("time constants", () => {
+  it("MS_PER_MINUTE equals 60 000 ms", () => {
+    expect(MS_PER_MINUTE).toBe(60_000);
+  });
+
+  it("ONE_HOUR_MS equals 3 600 000 ms", () => {
+    expect(ONE_HOUR_MS).toBe(3_600_000);
+  });
+
+  it("ONE_HOUR_MS equals 60 × MS_PER_MINUTE", () => {
+    expect(ONE_HOUR_MS).toBe(60 * MS_PER_MINUTE);
   });
 });
 
