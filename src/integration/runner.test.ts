@@ -2,9 +2,11 @@
  * Tests for src/integration/runner.ts
  *
  * Covers:
- *  - runIntegrationTests: no config, disabled, Docker unavailable, Docker fail,
- *    tests pass on first run, tests fail then pass after fix, exhausted fix
- *    attempts, docker teardown in finally, testsWritten flag, empty-diff path
+ *  - runIntegrationTests: no config → advisor flow (not_applicable / failed /
+ *    config_created → reload / config_created but file missing / invalid config),
+ *    disabled, Docker unavailable, Docker fail, tests pass on first run,
+ *    tests fail then pass after fix, exhausted fix attempts, docker teardown
+ *    in finally, testsWritten flag, empty-diff path
  */
 
 import { vi, describe, it, expect, beforeEach } from "vitest";
@@ -15,6 +17,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("./config.js", () => ({
   loadIntegrationConfig: vi.fn(),
+  integrationConfigPath: vi.fn().mockReturnValue("/data/integration/test-repo.yml"),
 }));
 
 vi.mock("./secrets.js", () => ({
@@ -40,6 +43,10 @@ vi.mock("../agents/coder.js", () => ({
   runCoder: vi.fn().mockResolvedValue({ success: true, result: "", durationMs: 100, error: undefined }),
 }));
 
+vi.mock("../agents/integration-advisor.js", () => ({
+  runIntegrationAdvisor: vi.fn(),
+}));
+
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(),
 }));
@@ -49,10 +56,11 @@ vi.mock("node:child_process", () => ({
 // ---------------------------------------------------------------------------
 
 import { execSync } from "node:child_process";
-import { loadIntegrationConfig } from "./config.js";
+import { loadIntegrationConfig, integrationConfigPath } from "./config.js";
 import { isDockerAvailable, startServices, stopServices } from "./docker.js";
 import { runIntegrationTestAgent } from "../agents/integration-test.js";
 import { runCoder } from "../agents/coder.js";
+import { runIntegrationAdvisor } from "../agents/integration-advisor.js";
 import { runIntegrationTests } from "./runner.js";
 import type { YardmasterConfig, RepoConfig } from "../config.js";
 import type { IntegrationConfig } from "./config.js";
@@ -118,27 +126,157 @@ beforeEach(() => {
   vi.mocked(isDockerAvailable).mockReturnValue(true);
   vi.mocked(runIntegrationTestAgent).mockResolvedValue({ wrote: false, summary: "NO_INTEGRATION_TESTS_NEEDED" });
   vi.mocked(runCoder).mockResolvedValue({ success: true, result: "", durationMs: 100, error: undefined } as any);
+  // default advisor response so tests that supply a real config are unaffected
+  vi.mocked(runIntegrationAdvisor).mockResolvedValue({ outcome: "not_applicable", summary: "NOT_APPLICABLE: no services" });
 });
 
 // ---------------------------------------------------------------------------
 // Early-exit paths (ran = false)
 // ---------------------------------------------------------------------------
 
-describe("runIntegrationTests — no config", () => {
-  it("returns ran=false when loadIntegrationConfig returns null", async () => {
+describe("runIntegrationTests — no config: advisor not_applicable", () => {
+  beforeEach(() => {
     vi.mocked(loadIntegrationConfig).mockReturnValue(null);
+    vi.mocked(runIntegrationAdvisor).mockResolvedValue({
+      outcome: "not_applicable",
+      summary: "NOT_APPLICABLE: pure CLI tool, no external services",
+    });
+  });
+
+  it("invokes the integration advisor when loadIntegrationConfig returns null", async () => {
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(runIntegrationAdvisor).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes config, repo, worktreePath, configPath and description to the advisor", async () => {
+    vi.mocked(integrationConfigPath).mockReturnValue("/data/integration/test-repo.yml");
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(runIntegrationAdvisor).toHaveBeenCalledWith(
+      CONFIG,
+      REPO,
+      WORKTREE,
+      "/data/integration/test-repo.yml",
+      DESCRIPTION
+    );
+  });
+
+  it("returns ran=false, passed=true when advisor says not_applicable", async () => {
     const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
     expect(result.ran).toBe(false);
     expect(result.passed).toBe(true);
     expect(result.attempts).toBe(0);
   });
 
-  it("returns 'no integration config' in output when config is null", async () => {
-    vi.mocked(loadIntegrationConfig).mockReturnValue(null);
+  it("includes advisor summary in output when not_applicable", async () => {
     const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
-    expect(result.output).toBe("no integration config");
+    expect(result.output).toContain("not applicable");
   });
 
+  it("does NOT spawn the integration test agent when advisor says not_applicable", async () => {
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(runIntegrationTestAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("runIntegrationTests — no config: advisor failed", () => {
+  beforeEach(() => {
+    vi.mocked(loadIntegrationConfig).mockReturnValue(null);
+    vi.mocked(runIntegrationAdvisor).mockResolvedValue({
+      outcome: "failed",
+      summary: "claude process timed out",
+    });
+  });
+
+  it("returns ran=false, passed=true when advisor fails (non-blocking)", async () => {
+    const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(result.ran).toBe(false);
+    expect(result.passed).toBe(true);
+    expect(result.attempts).toBe(0);
+  });
+
+  it("includes 'advisor failed' in output when advisor returns failed", async () => {
+    const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(result.output).toContain("advisor failed");
+  });
+
+  it("does NOT spawn the integration test agent when advisor fails", async () => {
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(runIntegrationTestAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("runIntegrationTests — no config: advisor config_created", () => {
+  it("reloads the integration config after advisor creates it", async () => {
+    vi.mocked(loadIntegrationConfig)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(makeIntegrationConfig());
+    vi.mocked(runIntegrationAdvisor).mockResolvedValue({
+      outcome: "config_created",
+      summary: "Wrote config. CONFIG_CREATED",
+    });
+    setupExecSync("", true);
+
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+
+    // loadIntegrationConfig called twice: initial check + reload after advisor
+    expect(loadIntegrationConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("proceeds to run integration tests after advisor creates a valid config", async () => {
+    vi.mocked(loadIntegrationConfig)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(makeIntegrationConfig());
+    vi.mocked(runIntegrationAdvisor).mockResolvedValue({
+      outcome: "config_created",
+      summary: "CONFIG_CREATED",
+    });
+    setupExecSync("", true);
+
+    const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+
+    expect(result.ran).toBe(true);
+    expect(result.passed).toBe(true);
+  });
+
+  it("returns ran=false, passed=false when advisor reports config_created but file is still missing", async () => {
+    vi.mocked(loadIntegrationConfig)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null); // still null after advisor
+    vi.mocked(runIntegrationAdvisor).mockResolvedValue({
+      outcome: "config_created",
+      summary: "CONFIG_CREATED",
+    });
+    vi.mocked(integrationConfigPath).mockReturnValue("/data/integration/test-repo.yml");
+
+    const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+
+    expect(result.ran).toBe(false);
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain("CONFIG_CREATED");
+    expect(result.output).toContain("/data/integration/test-repo.yml");
+  });
+
+  it("returns ran=false, passed=false when advisor creates an invalid config (parse error)", async () => {
+    vi.mocked(loadIntegrationConfig)
+      .mockReturnValueOnce(null)
+      .mockImplementationOnce(() => {
+        throw new Error("Invalid integration config: 'enabled' must be a boolean");
+      });
+    vi.mocked(runIntegrationAdvisor).mockResolvedValue({
+      outcome: "config_created",
+      summary: "CONFIG_CREATED",
+    });
+
+    const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+
+    expect(result.ran).toBe(false);
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain("advisor produced invalid config");
+    expect(result.output).toContain("'enabled' must be a boolean");
+  });
+});
+
+describe("runIntegrationTests — config.enabled false", () => {
   it("returns ran=false when config.enabled is false", async () => {
     vi.mocked(loadIntegrationConfig).mockReturnValue(makeIntegrationConfig({ enabled: false }));
     const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
@@ -147,10 +285,10 @@ describe("runIntegrationTests — no config", () => {
     expect(result.output).toBe("integration tests disabled");
   });
 
-  it("does NOT spawn the integration test agent when config is null", async () => {
-    vi.mocked(loadIntegrationConfig).mockReturnValue(null);
+  it("does NOT invoke the advisor when config.enabled is false", async () => {
+    vi.mocked(loadIntegrationConfig).mockReturnValue(makeIntegrationConfig({ enabled: false }));
     await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
-    expect(runIntegrationTestAgent).not.toHaveBeenCalled();
+    expect(runIntegrationAdvisor).not.toHaveBeenCalled();
   });
 
   it("does NOT spawn the integration test agent when config.enabled is false", async () => {

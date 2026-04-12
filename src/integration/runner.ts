@@ -1,10 +1,11 @@
 import { execSync } from "node:child_process";
 import type { YardmasterConfig, RepoConfig } from "../config.js";
-import { loadIntegrationConfig, type IntegrationConfig } from "./config.js";
+import { loadIntegrationConfig, integrationConfigPath, type IntegrationConfig } from "./config.js";
 import { resolveSecrets, buildIntegrationEnv } from "./secrets.js";
 import { startServices, stopServices, isDockerAvailable } from "./docker.js";
 import { scaffoldIntegrationTests } from "./scaffold.js";
 import { runIntegrationTestAgent } from "../agents/integration-test.js";
+import { runIntegrationAdvisor } from "../agents/integration-advisor.js";
 import { runCoder } from "../agents/coder.js";
 import { verifyCheckOrFix } from "../agents/verify-check.js";
 
@@ -39,9 +40,32 @@ export async function runIntegrationTests(
   //    when there's no config file or the repo has explicitly disabled integration tests.
   //    This avoids a 5-minute agent call (and migration attempts) on repos that have
   //    no integration test infrastructure.
-  const integrationConfig = loadIntegrationConfig(repo.name);
+  let integrationConfig = loadIntegrationConfig(repo.name);
   if (!integrationConfig) {
-    return { ran: false, passed: true, testsWritten: false, output: "no integration config", attempts: 0 };
+    // No config — integration testing is the norm, so ask the advisor agent to
+    // either scaffold a config or explicitly declare it not applicable.
+    console.log(`    No integration config for ${repo.name} — invoking integration advisor...`);
+    const cfgPath = integrationConfigPath(repo.name);
+    const advisor = await runIntegrationAdvisor(config, repo, worktreePath, cfgPath, description);
+    if (advisor.outcome === "not_applicable") {
+      console.log(`    Integration advisor: NOT_APPLICABLE — ${advisor.summary.slice(0, 200)}`);
+      return { ran: false, passed: true, testsWritten: false, output: `not applicable: ${advisor.summary.slice(0, 500)}`, attempts: 0 };
+    }
+    if (advisor.outcome === "failed") {
+      console.log(`    Integration advisor failed: ${advisor.summary.slice(0, 200)}`);
+      return { ran: false, passed: true, testsWritten: false, output: `advisor failed: ${advisor.summary.slice(0, 500)}`, attempts: 0 };
+    }
+    // config_created — try to load and validate
+    try {
+      integrationConfig = loadIntegrationConfig(repo.name);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ran: false, passed: false, testsWritten: false, output: `advisor produced invalid config: ${msg}`, attempts: 0 };
+    }
+    if (!integrationConfig) {
+      return { ran: false, passed: false, testsWritten: false, output: `advisor reported CONFIG_CREATED but no file found at ${cfgPath}`, attempts: 0 };
+    }
+    console.log(`    Integration config created by advisor`);
   }
   if (!integrationConfig.enabled) {
     return { ran: false, passed: true, testsWritten: false, output: "integration tests disabled", attempts: 0 };
