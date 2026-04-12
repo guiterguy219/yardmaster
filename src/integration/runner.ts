@@ -34,10 +34,16 @@ export async function runIntegrationTests(
   worktreePath: string,
   description: string,
 ): Promise<IntegrationTestResult> {
-  // 1. Load integration config
+  // 1. Load integration config — early-exit before spawning the integration test agent
+  //    when there's no config file or the repo has explicitly disabled integration tests.
+  //    This avoids a 5-minute agent call (and migration attempts) on repos that have
+  //    no integration test infrastructure.
   const integrationConfig = loadIntegrationConfig(repo.name);
-  if (!integrationConfig || !integrationConfig.enabled) {
+  if (!integrationConfig) {
     return { ran: false, passed: true, testsWritten: false, output: "no integration config", attempts: 0 };
+  }
+  if (!integrationConfig.enabled) {
+    return { ran: false, passed: true, testsWritten: false, output: "integration tests disabled", attempts: 0 };
   }
 
   // 2. Check Docker availability (needed for docker-* services)

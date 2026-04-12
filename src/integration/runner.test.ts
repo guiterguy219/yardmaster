@@ -144,6 +144,19 @@ describe("runIntegrationTests — no config", () => {
     const result = await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
     expect(result.ran).toBe(false);
     expect(result.passed).toBe(true);
+    expect(result.output).toBe("integration tests disabled");
+  });
+
+  it("does NOT spawn the integration test agent when config is null", async () => {
+    vi.mocked(loadIntegrationConfig).mockReturnValue(null);
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(runIntegrationTestAgent).not.toHaveBeenCalled();
+  });
+
+  it("does NOT spawn the integration test agent when config.enabled is false", async () => {
+    vi.mocked(loadIntegrationConfig).mockReturnValue(makeIntegrationConfig({ enabled: false }));
+    await runIntegrationTests(CONFIG, REPO, "t1", WORKTREE, DESCRIPTION);
+    expect(runIntegrationTestAgent).not.toHaveBeenCalled();
   });
 });
 
