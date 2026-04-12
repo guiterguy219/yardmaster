@@ -6,7 +6,7 @@ import { executeTask } from "./task-runner.js";
 import { loadConfig, getRepo } from "./config.js";
 import { getRecentTasks } from "./db.js";
 import { checkCapacity } from "./capacity.js";
-import { enqueueTask, getQueueContents, removeJob, changePriority, closeQueue } from "./queue/task-queue.js";
+import { enqueueTask, getQueueContents, removeJob, changePriority, closeQueue, pauseQueue, resumeQueue, isQueuePaused, getQueue } from "./queue/task-queue.js";
 import { startWorker, stopWorker } from "./queue/task-worker.js";
 import { PRIORITY, PRIORITY_LABELS, parsePriority, type PriorityLevel } from "./queue/constants.js";
 import { scanReposForIssues } from "./issue-scanner.js";
@@ -237,6 +237,50 @@ program
     process.on("SIGTERM", shutdown);
 
     console.log("Worker running. Press Ctrl+C to stop.\n");
+  });
+
+// ── ym drain / ym resume ────────────────────────────────
+program
+  .command("drain")
+  .description("Pause the queue: workers finish their current job but stop picking up new ones. State persists in Redis until 'ym resume'. Use --all to also abort the active job (best-effort: marks active jobs failed; the worker subprocess may still complete).")
+  .option("--all", "Also abort any currently-running job (best-effort)", false)
+  .action(async (opts: { all: boolean }) => {
+    await pauseQueue();
+    console.log("Queue paused. Workers will finish current jobs but pick up no new ones.");
+
+    if (opts.all) {
+      const queue = getQueue();
+      const active = await queue.getJobs(["active"]);
+      if (active.length === 0) {
+        console.log("No active jobs to abort.");
+      } else {
+        for (const job of active) {
+          try {
+            await job.moveToFailed(new Error("Aborted by ym drain --all"), "ym-drain", false);
+            console.log(`  Aborted active job ${job.id}`);
+          } catch (err) {
+            console.log(`  Failed to abort job ${job.id}: ${(err as Error).message}`);
+          }
+        }
+        console.log("Note: the worker subprocess running the aborted job may continue until it completes its current step.");
+      }
+    }
+
+    await closeQueue();
+  });
+
+program
+  .command("resume")
+  .description("Resume the queue after 'ym drain'. Workers will start picking up jobs again.")
+  .action(async () => {
+    const wasPaused = await isQueuePaused();
+    await resumeQueue();
+    if (wasPaused) {
+      console.log("Queue resumed. Workers will pick up jobs again.");
+    } else {
+      console.log("Queue was not paused; nothing to do.");
+    }
+    await closeQueue();
   });
 
 // ── ym scan ─────────────────────────────────────────────

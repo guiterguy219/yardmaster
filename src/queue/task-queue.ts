@@ -105,6 +105,18 @@ export async function changePriority(
   return newJob.id!;
 }
 
+export async function pauseQueue(): Promise<void> {
+  await getQueue().pause();
+}
+
+export async function resumeQueue(): Promise<void> {
+  await getQueue().resume();
+}
+
+export async function isQueuePaused(): Promise<boolean> {
+  return getQueue().isPaused();
+}
+
 export async function closeQueue(): Promise<void> {
   if (_queue) {
     await _queue.close();
