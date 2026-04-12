@@ -50,7 +50,7 @@ function makeContext(overrides: Partial<DiagnosticContext> = {}): DiagnosticCont
 }
 
 function agentSuccess(json: object) {
-  return { success: true, result: JSON.stringify(json), error: null, durationMs: 100 };
+  return { success: true, result: JSON.stringify(json), error: undefined, durationMs: 100 };
 }
 
 function agentFailure(error: string) {
@@ -206,7 +206,7 @@ describe("runDiagnostician", () => {
           category: "unknown",
           action: { type: "give_up", reason: "done" },
         }) + "\n```",
-        error: null,
+        error: undefined,
         durationMs: 100,
       });
       const result = await runDiagnostician(makeConfig(), makeContext());
@@ -220,7 +220,8 @@ describe("runDiagnostician", () => {
       vi.mocked(runAgent).mockResolvedValue({
         success: true,
         result: "This is plain text, not JSON.",
-        error: null,
+        error: undefined,
+        durationMs: 100,
       });
       const result = await runDiagnostician(makeConfig(), makeContext());
       expect(result.category).toBe("unknown");
@@ -234,7 +235,7 @@ describe("runDiagnostician", () => {
 
     it("truncates long plain-text output to 500 chars in diagnosis", async () => {
       const longText = "A".repeat(600);
-      vi.mocked(runAgent).mockResolvedValue({ success: true, result: longText, error: null });
+      vi.mocked(runAgent).mockResolvedValue({ success: true, result: longText, error: undefined, durationMs: 100 });
       const result = await runDiagnostician(makeConfig(), makeContext());
       expect(result.diagnosis.length).toBeLessThanOrEqual(500);
     });
