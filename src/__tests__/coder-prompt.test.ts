@@ -139,3 +139,41 @@ describe("buildCoderPrompt — project context", () => {
     expect(getContextForAgent).toHaveBeenCalledWith("coder", REPO.name);
   });
 });
+
+// ---------------------------------------------------------------------------
+// buildCoderPrompt — documentation lookup section
+// ---------------------------------------------------------------------------
+
+describe("buildCoderPrompt — documentation lookup", () => {
+  it("includes a Documentation Lookup section", () => {
+    const prompt = buildCoderPrompt(REPO, TASK, WORKTREE);
+    expect(prompt).toContain("## Documentation Lookup");
+  });
+
+  it("includes the ym context docs command with the correct repo name", () => {
+    const prompt = buildCoderPrompt(REPO, TASK, WORKTREE);
+    expect(prompt).toContain(`ym context docs --repo ${REPO.name} --lib`);
+  });
+
+  it("documentation lookup command uses the repo name not the github org/repo", () => {
+    const prompt = buildCoderPrompt(REPO, TASK, WORKTREE);
+    // Should use repo.name ("test-repo"), not "acme/widget"
+    expect(prompt).toContain("--repo test-repo");
+    expect(prompt).not.toContain("--repo acme/widget");
+  });
+
+  it("mentions caching and quality advantage over raw web searches", () => {
+    const prompt = buildCoderPrompt(REPO, TASK, WORKTREE);
+    expect(prompt).toContain("cached for subsequent agents");
+    expect(prompt).toContain("raw web searches");
+  });
+
+  it("Documentation Lookup section appears before Instructions section", () => {
+    const prompt = buildCoderPrompt(REPO, TASK, WORKTREE);
+    const docsIdx = prompt.indexOf("## Documentation Lookup");
+    const instructionsIdx = prompt.indexOf("## Instructions");
+    expect(docsIdx).toBeGreaterThan(-1);
+    expect(instructionsIdx).toBeGreaterThan(-1);
+    expect(docsIdx).toBeLessThan(instructionsIdx);
+  });
+});

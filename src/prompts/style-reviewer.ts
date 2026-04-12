@@ -56,5 +56,11 @@ ${context ? `\n${context}` : ""}${priorSection}
 ${diff}
 \`\`\`
 
+## Documentation Lookup
+
+When you need to verify idiomatic usage patterns for a library or framework, run:
+  ym context docs --repo ${repo.name} --lib <library> "<query>"
+This searches the web for relevant docs, chunks and caches the results, and returns snippets. Prefer this over raw web searches.
+
 Review the diff above for style issues only and return your verdict as JSON.`;
 }
