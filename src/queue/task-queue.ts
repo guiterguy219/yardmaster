@@ -10,6 +10,7 @@ export interface QueuedTask {
   source: string;
   issueRef?: string;
   queuedAt: number;
+  state?: "waiting" | "active" | "delayed" | "prioritized";
 }
 
 interface TaskJobData {
@@ -56,22 +57,30 @@ export async function enqueueTask(
 
 export async function getQueueContents(): Promise<QueuedTask[]> {
   const queue = getQueue();
-  const jobs = await queue.getJobs(["waiting", "delayed", "prioritized"]);
+  const jobs = await queue.getJobs(["active", "waiting", "delayed", "prioritized"]);
 
-  return jobs
-    .map((job) => {
-      const data = job.data as TaskJobData;
-      return {
-        id: job.id!,
-        repo: data.repo,
-        description: data.description,
-        priority: data.priority,
-        source: data.source,
-        issueRef: data.issueRef,
-        queuedAt: data.queuedAt,
-      };
-    })
-    .sort((a, b) => a.priority - b.priority || a.queuedAt - b.queuedAt);
+  const results: QueuedTask[] = [];
+  for (const job of jobs) {
+    const data = job.data as TaskJobData;
+    const state = await job.getState() as QueuedTask["state"];
+    results.push({
+      id: job.id!,
+      repo: data.repo,
+      description: data.description,
+      priority: data.priority,
+      source: data.source,
+      issueRef: data.issueRef,
+      queuedAt: data.queuedAt,
+      state,
+    });
+  }
+
+  // Active jobs first, then by priority and queue time
+  return results.sort((a, b) => {
+    if (a.state === "active" && b.state !== "active") return -1;
+    if (b.state === "active" && a.state !== "active") return 1;
+    return a.priority - b.priority || a.queuedAt - b.queuedAt;
+  });
 }
 
 export async function removeJob(jobId: string): Promise<void> {

@@ -8,6 +8,7 @@ export interface QueueEntry {
   description: string;
   priority: PriorityLevel;
   queuedAt: number;
+  state?: string;
 }
 
 export interface WorkerStatusInfo {
@@ -90,7 +91,8 @@ export function formatQueueList(entries: QueueEntry[]): string {
   const rows = entries.map((e, i) => {
     const label = PRIORITY_LABELS[e.priority] ?? String(e.priority);
     const desc = escapeHtml(truncate(e.description, 60));
-    return `${i + 1}. [${escapeHtml(label)}] <code>${escapeHtml(e.id)}</code> <b>${escapeHtml(e.repo)}</b>\n   ${desc}`;
+    const stateTag = e.state === "active" ? " 🚀 RUNNING" : "";
+    return `${i + 1}. [${escapeHtml(label)}]${stateTag} <code>${escapeHtml(e.id)}</code> <b>${escapeHtml(e.repo)}</b>\n   ${desc}`;
   });
 
   return [`<b>📋 Queue</b> (${entries.length})`, ...rows].join("\n");

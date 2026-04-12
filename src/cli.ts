@@ -184,7 +184,8 @@ queueCmd
       const label = PRIORITY_LABELS[t.priority as PriorityLevel] ?? `P${t.priority}`;
       const issue = t.issueRef ? ` (${t.issueRef})` : "";
       const age = formatAge(t.queuedAt);
-      console.log(`  [${label}] ${t.id}  ${t.repo}  ${t.description.slice(0, 50)}${issue}  (${age})`);
+      const stateTag = t.state === "active" ? " [RUNNING]" : "";
+      console.log(`  [${label}]${stateTag} ${t.id}  ${t.repo}  ${t.description.slice(0, 50)}${issue}  (${age})`);
     }
     console.log();
     await closeQueue();
