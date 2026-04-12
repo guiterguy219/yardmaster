@@ -458,18 +458,30 @@ ${tqCheckOutput.slice(0, 4000)}`;
               console.log(`  Final check passed after diagnostic fix`);
             } catch {
               console.log(`  Final check still fails after diagnostic fix`);
+              if (worktree) {
+                const wip = saveWipWork(worktree, description);
+                if (wip.saved) console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+              }
               updateTask(taskId, { status: "failed", error: finalCheckError });
               if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
               else notifyTaskFailed(taskId, repoName, finalCheckError);
               return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
             }
           } else {
+            if (worktree) {
+              const wip = saveWipWork(worktree, description);
+              if (wip.saved) console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+            }
             updateTask(taskId, { status: "failed", error: finalCheckError });
             if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
             else notifyTaskFailed(taskId, repoName, finalCheckError);
             return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
           }
         } else {
+          if (worktree) {
+            const wip = saveWipWork(worktree, description);
+            if (wip.saved) console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+          }
           updateTask(taskId, { status: "failed", error: finalCheckError });
           if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
           else notifyTaskFailed(taskId, repoName, finalCheckError);
