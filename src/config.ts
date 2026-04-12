@@ -51,7 +51,7 @@ export function loadTelegramConfig(): TelegramConfig | undefined {
   return { botToken, chatId };
 }
 
-const CONFIG_PATH = join(homedir(), "code", "gibson-ops", "yardmaster", "repos.json");
+export const CONFIG_PATH = join(homedir(), "code", "gibson-ops", "yardmaster", "repos.json");
 const DATA_DIR = join(homedir(), "code", "gibson-ops", "yardmaster", "data");
 
 export function loadConfig(): YardmasterConfig {
