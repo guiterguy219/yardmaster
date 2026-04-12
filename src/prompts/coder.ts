@@ -30,6 +30,12 @@ ${taskDescription}
 - Name: ${repo.githubOrg}/${repo.githubRepo}
 - Working directory: ${worktreePath}
 ${context ? `\n${context}\n` : ""}
+## Documentation Lookup
+
+When you need documentation for a library, framework, or API you're unfamiliar with, run:
+  ym context docs --repo ${repo.name} --lib <library> "<query>"
+This searches the web for relevant docs, chunks and caches the results, and returns snippets. Prefer this over raw web searches — results are higher quality and cached for subsequent agents.
+
 ## Instructions
 
 Implement the task described above. Read the relevant existing code first to understand the codebase structure and conventions, then make the necessary changes.`;
