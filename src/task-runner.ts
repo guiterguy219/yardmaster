@@ -562,6 +562,11 @@ ${errorOutput.slice(0, 4000)}`;
           const wip = saveWipWork(worktree, description);
           if (wip.saved) {
             console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+            if (wip.pushed && wip.remoteRef) {
+              console.log(`  Preservation branch pushed: ${wip.remoteRef} (recover with: ym recover ${taskId})`);
+            } else if (wip.preserveBranch) {
+              console.log(`  Preservation branch ${wip.preserveBranch} created locally (push failed — work is local-only)`);
+            }
           }
         } catch (err) {
           console.log(

@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { Command } from "commander";
 import { executeTask } from "./task-runner.js";
 import { loadConfig, getRepo } from "./config.js";
-import { getRecentTasks } from "./db.js";
+import { getRecentTasks, getTask } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { enqueueTask, getQueueContents, removeJob, changePriority, closeQueue, pauseQueue, resumeQueue, isQueuePaused, getQueue } from "./queue/task-queue.js";
 import { startWorker, stopWorker } from "./queue/task-worker.js";
@@ -14,7 +14,9 @@ import { runDoctor } from "./doctor.js";
 import { onboardRepo } from "./onboarding.js";
 import { takeoverPr } from "./pr-takeover.js";
 import { detectAndMarkInterrupted, recoverInterruptedTasks } from "./recovery.js";
-import { removeOrphanedWorktrees } from "./worktree.js";
+import { removeOrphanedWorktrees, preserveBranchName } from "./worktree.js";
+import { mkdirSync, existsSync } from "fs";
+import { join } from "path";
 import { ingestRepo } from "./ingestor.js";
 import { ingestDocs, searchDocsUrls, pruneStaleDocEntries, type DocsIngestResult } from "./context/ingest-docs.js";
 import { purgeStaleWebDocs } from "./context/maintenance.js";
@@ -387,11 +389,17 @@ program
 
 // ── ym recover ──────────────────────────────────────────
 program
-  .command("recover")
-  .description("Detect tasks whose worker processes have died, mark them interrupted, and attempt to resume them. Use --gc to also remove orphaned worktrees for finished tasks.")
+  .command("recover [taskId]")
+  .description("Detect tasks whose worker processes have died, mark them interrupted, and attempt to resume them. Use --gc to also remove orphaned worktrees for finished tasks. If <taskId> is given, fetch its preserved `ym-failed/<taskId>` branch into a fresh worktree for inspection.")
   .option("--gc", "Also remove orphaned worktrees left behind by completed or failed tasks")
-  .action(async (opts: { gc?: boolean }) => {
+  .option("--repo <name>", "Repo to recover from (required when <taskId> isn't found in the local DB)")
+  .action(async (taskId: string | undefined, opts: { gc?: boolean; repo?: string }) => {
     const config = loadConfig();
+
+    if (taskId) {
+      await recoverPreservedTask(config, taskId, opts.repo);
+      return;
+    }
 
     console.log("\nYardmaster — Recovery\n");
 
@@ -416,6 +424,82 @@ program
       console.log();
     }
   });
+
+async function recoverPreservedTask(
+  config: ReturnType<typeof loadConfig>,
+  taskId: string,
+  repoOverride?: string
+): Promise<void> {
+  const branch = preserveBranchName(taskId);
+
+  let repoName = repoOverride;
+  if (!repoName) {
+    const task = getTask(taskId);
+    if (task) repoName = task.repo;
+  }
+  if (!repoName) {
+    console.error(`Error: task ${taskId} not found in local DB. Pass --repo <name> to specify which repo to fetch from.`);
+    process.exit(1);
+  }
+
+  const repo = getRepo(config, repoName);
+
+  console.log(`\nYardmaster — Recover preserved task ${taskId}`);
+  console.log(`  Repo:   ${repo.name}`);
+  console.log(`  Branch: ${branch}\n`);
+
+  // Fetch the preservation branch from origin
+  console.log(`Fetching origin/${branch}...`);
+  try {
+    // Force-update local branch in case a stale local copy exists from a prior recover attempt.
+    execSync(`git fetch origin "+${branch}:${branch}"`, {
+      cwd: repo.localPath,
+      stdio: "pipe",
+    });
+  } catch (err) {
+    console.error(
+      `Error: could not fetch ${branch} from origin: ${err instanceof Error ? err.message : String(err)}`
+    );
+    console.error(`The preservation branch may not exist remotely. Check: git ls-remote origin "${branch}"`);
+    process.exit(1);
+  }
+
+  // Create a fresh worktree from the preserved branch. If a previous recover
+  // invocation left behind a worktree directory or branch, append a timestamp
+  // suffix so we don't collide.
+  mkdirSync(config.worktreeBaseDir, { recursive: true });
+  const baseSuffix = `${taskId}-recovered`;
+  let suffix = baseSuffix;
+  let worktreePath = join(config.worktreeBaseDir, suffix);
+  let recoveryBranch = `ym-recovered/${taskId}`;
+  if (existsSync(worktreePath)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    suffix = `${baseSuffix}-${stamp}`;
+    worktreePath = join(config.worktreeBaseDir, suffix);
+    recoveryBranch = `ym-recovered/${taskId}-${stamp}`;
+    console.log(
+      `  Note: ${baseSuffix} already exists; using ${suffix} instead. Remove the old worktree manually if no longer needed.`
+    );
+  }
+
+  console.log(`Creating worktree at ${worktreePath} on branch ${recoveryBranch}...`);
+  try {
+    execSync(
+      `git worktree add "${worktreePath}" -b "${recoveryBranch}" "${branch}"`,
+      { cwd: repo.localPath, stdio: "pipe" }
+    );
+  } catch (err) {
+    console.error(
+      `Error: could not create worktree: ${err instanceof Error ? err.message : String(err)}`
+    );
+    process.exit(1);
+  }
+
+  console.log(`\nRecovered preserved work for ${taskId}.`);
+  console.log(`  Worktree: ${worktreePath}`);
+  console.log(`  Branch:   ${recoveryBranch} (based on ${branch})`);
+  console.log(`\nInspect, resume, or open a PR from ${worktreePath}.\n`);
+}
 
 // ── shared ingest helper ───────────────────────────────
 async function runIngest(repoName: string): Promise<void> {
