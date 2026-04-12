@@ -19,11 +19,12 @@ try {
 function sendJsonRpc(
   child: ChildProcess,
   message: Record<string, unknown>,
+  timeoutMs = 15000,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error("Timed out waiting for JSON-RPC response"));
-    }, 15000);
+    }, timeoutMs);
 
     let buffer = "";
     const onData = (chunk: Buffer) => {

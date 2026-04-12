@@ -83,6 +83,10 @@ vi.mock("../failure-analysis.js", () => ({
   analyzeFailure: vi.fn().mockResolvedValue("unknown"),
 }));
 
+vi.mock("../diagnostician.js", () => ({
+  runDiagnosticLoop: vi.fn().mockResolvedValue({ recovered: false, diagnosis: "test", action: "give_up" }),
+}));
+
 vi.mock("../issue-lifecycle.js", () => ({
   notifyStarted: vi.fn(),
   notifyPrCreated: vi.fn(),
@@ -114,7 +118,7 @@ function makeConfig(): YardmasterConfig {
     claudeBinary: "claude",
     defaultModel: "sonnet",
     maxConcurrentAgents: 1,
-    timeouts: { coder: 60_000, reviewer: 60_000, gitAgent: 60_000 },
+    timeouts: { coder: 60_000, reviewer: 60_000, gitAgent: 60_000, diagnostician: 180_000, diagnosticianEscalated: 300_000 },
   };
 }
 
