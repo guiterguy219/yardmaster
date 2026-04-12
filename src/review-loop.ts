@@ -161,7 +161,11 @@ async function runSubTaskReviewLoop(
   toolsContext: string,
   subTaskFiles?: string[]
 ): Promise<{ converged: boolean; rounds: number; roundSummaries: string[]; issues: ReviewIssue[]; judgeUsed: boolean }> {
-  const MAX_ROUNDS = 4;
+  // Capped at 2 (was 4) as an immediate workaround for the cross-round memory
+  // leak tracked in guiterguy219/yardmaster#83. Forces convergence via the judge
+  // before retained per-round allocations exhaust the worker heap. Restore to 4
+  // once the underlying leak is profiled and fixed.
+  const MAX_ROUNDS = 2;
   const prefix = totalSubTasks > 1 ? `[${subTaskIndex + 1}/${totalSubTasks}]` : "";
   let currentPrompt = toolsContext ? `## Tools & Libraries\n\n${toolsContext}\n\n${subTaskDescription}` : subTaskDescription;
   let allIssues: ReviewIssue[] = [];
@@ -171,6 +175,11 @@ async function runSubTaskReviewLoop(
   const logicApprovedFiles = new Set<string>();
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
+    // Per-round heap instrumentation — surfaces linear-growth signatures of the
+    // leak tracked in guiterguy219/yardmaster#83. Cheap (O(1)) and safe to keep.
+    const heapStart = process.memoryUsage().heapUsed;
+    console.log(`  ${prefix} [Round ${round}] heapUsed=${(heapStart / 1024 / 1024).toFixed(1)}MB`);
+
     // Step 1: Run coder
     console.log(`  ${prefix} [Round ${round}] Running coder...`);
     const coderResult = await runCoder(config, repo, currentPrompt, worktreePath);
@@ -402,14 +411,19 @@ async function runSubTaskReviewLoop(
 
     roundSummaries.push(roundBase);
 
-    // Release the diff string to reduce peak memory across rounds.
-    // The diff is already persisted to SQLite via logReviewRound above.
-    diff = "";
-
     // Build feedback and continue
     const filteredIssues = filterIssuesBySeverity(allIssues, round);
     currentPrompt = buildFeedbackPrompt(subTaskDescription, filteredIssues);
     console.log(`  ${prefix} [Round ${round}] Revisions needed (${filteredIssues.length} issues), retrying...`);
+
+    // Release the diff string before the next iteration. It is already
+    // persisted to SQLite via logReviewRound above. Other large per-round
+    // locals (coderResult, styleParsed, logicParsed) are loop-scoped const/let
+    // and re-bound on the next iteration. Defensive measure against the
+    // cross-round leak tracked in guiterguy219/yardmaster#83.
+    diff = "";
+    const heapEnd = process.memoryUsage().heapUsed;
+    console.log(`  ${prefix} [Round ${round}] complete heapUsed=${(heapEnd / 1024 / 1024).toFixed(1)}MB (delta=${((heapEnd - heapStart) / 1024 / 1024).toFixed(1)}MB)`);
   }
 
   return { converged: false, rounds: MAX_ROUNDS, roundSummaries, issues: allIssues, judgeUsed: false };

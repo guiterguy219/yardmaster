@@ -5,7 +5,7 @@
  * dynamically imports tsx) so it cannot be imported directly.  Instead we
  * test the two pure logic fragments in isolation:
  *
- *  1. buildNodeOptions — merges existing NODE_OPTIONS with the new heap flag
+ *  1. buildNodeOptions — merges existing NODE_OPTIONS with the new heap flags
  *  2. handleChildExit  — forwards exit code or re-raises signal
  *
  * These are extracted as inline equivalents of the exact expressions used in
@@ -18,14 +18,19 @@ import { describe, it, expect, vi } from "vitest";
 // Helpers — inline equivalents of the bin/ym.js expressions under test
 // ---------------------------------------------------------------------------
 
+const HEAP_FLAGS = "--max-old-space-size=4096 --heapsnapshot-near-heap-limit=3";
+
 /**
  * Mirrors:
  *   const existing = (process.env.NODE_OPTIONS ?? "").trim();
- *   const nodeOptions = [existing, "--max-old-space-size=4096"].filter(Boolean).join(" ");
+ *   const nodeOptions = [existing, "--max-old-space-size=4096", "--heapsnapshot-near-heap-limit=3"]
+ *     .filter(Boolean).join(" ");
  */
 function buildNodeOptions(existingEnv: string | undefined): string {
   const existing = (existingEnv ?? "").trim();
-  return [existing, "--max-old-space-size=4096"].filter(Boolean).join(" ");
+  return [existing, "--max-old-space-size=4096", "--heapsnapshot-near-heap-limit=3"]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**
@@ -51,39 +56,43 @@ function handleChildExit(
 // ---------------------------------------------------------------------------
 
 describe("buildNodeOptions", () => {
-  it("returns only the heap flag when NODE_OPTIONS is undefined", () => {
-    expect(buildNodeOptions(undefined)).toBe("--max-old-space-size=4096");
+  it("returns only the heap flags when NODE_OPTIONS is undefined", () => {
+    expect(buildNodeOptions(undefined)).toBe(HEAP_FLAGS);
   });
 
-  it("returns only the heap flag when NODE_OPTIONS is an empty string", () => {
-    expect(buildNodeOptions("")).toBe("--max-old-space-size=4096");
+  it("returns only the heap flags when NODE_OPTIONS is an empty string", () => {
+    expect(buildNodeOptions("")).toBe(HEAP_FLAGS);
   });
 
-  it("returns only the heap flag when NODE_OPTIONS is whitespace-only", () => {
-    expect(buildNodeOptions("   ")).toBe("--max-old-space-size=4096");
+  it("returns only the heap flags when NODE_OPTIONS is whitespace-only", () => {
+    expect(buildNodeOptions("   ")).toBe(HEAP_FLAGS);
   });
 
-  it("appends the heap flag to an existing NODE_OPTIONS value", () => {
+  it("appends the heap flags to an existing NODE_OPTIONS value", () => {
     expect(buildNodeOptions("--experimental-vm-modules")).toBe(
-      "--experimental-vm-modules --max-old-space-size=4096",
+      `--experimental-vm-modules ${HEAP_FLAGS}`,
     );
   });
 
   it("trims leading/trailing whitespace before joining", () => {
     expect(buildNodeOptions("  --experimental-vm-modules  ")).toBe(
-      "--experimental-vm-modules --max-old-space-size=4096",
+      `--experimental-vm-modules ${HEAP_FLAGS}`,
     );
   });
 
   it("preserves multiple existing flags separated by spaces", () => {
     expect(buildNodeOptions("--flag-a --flag-b")).toBe(
-      "--flag-a --flag-b --max-old-space-size=4096",
+      `--flag-a --flag-b ${HEAP_FLAGS}`,
     );
   });
 
-  it("always ends with --max-old-space-size=4096", () => {
+  it("always ends with the heapsnapshot flag", () => {
     const result = buildNodeOptions("--something-else");
-    expect(result).toMatch(/--max-old-space-size=4096$/);
+    expect(result).toMatch(/--heapsnapshot-near-heap-limit=3$/);
+  });
+
+  it("includes the max-old-space-size flag", () => {
+    expect(buildNodeOptions("--something-else")).toContain("--max-old-space-size=4096");
   });
 
   it("never produces leading or trailing spaces", () => {

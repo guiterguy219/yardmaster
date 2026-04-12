@@ -102,6 +102,8 @@ vi.mock("../agents/logic-reviewer.js", () => ({
 import { runReviewLoop } from "../review-loop.js";
 import { runStyleReviewer } from "../agents/style-reviewer.js";
 import { runLogicReviewer } from "../agents/logic-reviewer.js";
+import { runJudge } from "../agents/judge.js";
+import { runCoder } from "../agents/coder.js";
 import type { YardmasterConfig, RepoConfig } from "../config.js";
 import { execSync } from "node:child_process";
 
@@ -190,6 +192,143 @@ describe("reviewer dispatch — parallel execution", () => {
 
     expect(runStyleReviewer).toHaveBeenCalledTimes(1);
     expect(runLogicReviewer).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MAX_ROUNDS cap — judge escalation after round 2
+//
+// MAX_ROUNDS was reduced from 4 to 2 as a workaround for the cross-round
+// memory leak tracked in guiterguy219/yardmaster#83. These tests verify that
+// the judge is escalated after exactly 2 rounds (not 3 or 4) when reviewers
+// persistently return revise with major issues.
+// ---------------------------------------------------------------------------
+
+/** Reviewer result that returns "revise" with one major issue. */
+const REVISE_MAJOR = {
+  result: JSON.stringify({
+    verdict: "revise",
+    issues: [{ severity: "major", file: "src/foo.ts", line: 1, description: "needs work" }],
+  }),
+  durationMs: 10,
+  success: true,
+};
+
+describe("MAX_ROUNDS cap — judge escalated at round 2", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Reset execSync to return a non-empty diff so the empty-diff guard doesn't fire
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "+ some changes\n";
+      if (cmd === "git diff --cached --name-only") return "src/foo.ts\n";
+      return "";
+    });
+
+    // Default: both reviewers approve (individual tests override as needed)
+    vi.mocked(runStyleReviewer).mockResolvedValue({
+      result: '{"verdict":"approve","issues":[]}',
+      durationMs: 10,
+      success: true,
+    });
+    vi.mocked(runLogicReviewer).mockResolvedValue({
+      result: '{"verdict":"approve","issues":[]}',
+      durationMs: 10,
+      success: true,
+    });
+  });
+
+  it("escalates to judge after round 2 when both reviewers always return revise with major issues", async () => {
+    vi.mocked(runStyleReviewer).mockResolvedValue(REVISE_MAJOR);
+    vi.mocked(runLogicReviewer).mockResolvedValue(REVISE_MAJOR);
+
+    const result = await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-max-rounds-judge",
+      "/worktree",
+      "add feature"
+    );
+
+    // Judge must have been called (max-rounds escalation at round 2)
+    expect(runJudge).toHaveBeenCalledTimes(1);
+    // Judge mock returns "ship" → result is converged with judgeUsed=true
+    expect(result.converged).toBe(true);
+    expect(result.finalVerdict).toBe("judge_approved");
+  });
+
+  it("coder runs exactly twice before judge escalation (once per round)", async () => {
+    vi.mocked(runStyleReviewer).mockResolvedValue(REVISE_MAJOR);
+    vi.mocked(runLogicReviewer).mockResolvedValue(REVISE_MAJOR);
+
+    await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-max-rounds-coder-count",
+      "/worktree",
+      "add feature"
+    );
+
+    // Round 1 coder + round 2 coder = 2 calls.
+    // Judge returns "ship" with no fix prompts → no additional coder call.
+    expect(runCoder).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT call the judge on round 1 when reviewers revise (only hits at round 2)", async () => {
+    vi.mocked(runStyleReviewer).mockResolvedValue(REVISE_MAJOR);
+    vi.mocked(runLogicReviewer).mockResolvedValue(REVISE_MAJOR);
+
+    await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-max-rounds-no-early-judge",
+      "/worktree",
+      "add feature"
+    );
+
+    // Judge called exactly once (at round 2, not twice)
+    expect(runJudge).toHaveBeenCalledTimes(1);
+  });
+
+  it("converges without calling judge when only minor/nit issues after round 2 (smart convergence)", async () => {
+    const reviseMinor = {
+      result: JSON.stringify({
+        verdict: "revise",
+        issues: [{ severity: "minor", file: "src/foo.ts", line: 1, description: "style nit" }],
+      }),
+      durationMs: 10,
+      success: true,
+    };
+
+    vi.mocked(runStyleReviewer).mockResolvedValue(reviseMinor);
+    vi.mocked(runLogicReviewer).mockResolvedValue(reviseMinor);
+
+    const result = await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-smart-convergence-round2",
+      "/worktree",
+      "add feature"
+    );
+
+    // Smart convergence at round 2: only minor issues → accept without judge
+    expect(result.converged).toBe(true);
+    expect(runJudge).not.toHaveBeenCalled();
+  });
+
+  it("converges on round 1 when both reviewers approve (judge never called)", async () => {
+    // Both reviewers approve on first round — baseline: unaffected by MAX_ROUNDS change
+    const result = await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-converge-round1",
+      "/worktree",
+      "add feature"
+    );
+
+    expect(result.converged).toBe(true);
+    expect(runJudge).not.toHaveBeenCalled();
+    expect(runCoder).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -68,6 +68,10 @@ export async function runAgent(
 
     let stdout = "";
     let stderr = "";
+    // Cap retained stderr to avoid unbounded growth across long-lived agent
+    // invocations (e.g. 10-min coder runs with --verbose stream-json can emit
+    // tens of MB of diagnostic output). We only need the tail for error reporting.
+    const STDERR_CAP = 64 * 1024;
     let lastResult = "";
     let capacityEvent: CapacityEvent | undefined;
     let killed = false;
@@ -101,6 +105,9 @@ export async function runAgent(
 
     child.stderr!.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
+      if (stderr.length > STDERR_CAP * 2) {
+        stderr = stderr.slice(-STDERR_CAP);
+      }
     });
 
     function handleStreamMessage(msg: StreamJsonMessage) {
