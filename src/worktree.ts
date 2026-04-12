@@ -38,9 +38,18 @@ export function createWorktree(
   return { path: worktreePath, branch, taskId };
 }
 
+export interface CleanupWorktreeOptions {
+  /**
+   * If true, the local branch is left in place so the work can be recovered later
+   * (e.g. via `ym recover`). The worktree directory is still removed.
+   */
+  preserveBranch?: boolean;
+}
+
 export function cleanupWorktree(
   repo: RepoConfig,
-  worktree: Worktree
+  worktree: Worktree,
+  options: CleanupWorktreeOptions = {}
 ): void {
   try {
     // Remove the worktree
@@ -58,6 +67,11 @@ export function cleanupWorktree(
     } catch {
       // best effort
     }
+  }
+
+  if (options.preserveBranch) {
+    // Keep the branch around so failed work can be recovered.
+    return;
   }
 
   // Delete the local branch

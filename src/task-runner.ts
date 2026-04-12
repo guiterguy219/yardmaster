@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { loadConfig, getRepo, type RepoConfig } from "./config.js";
-import { createTask, updateTask, updatePipelineStage } from "./db.js";
+import { createTask, updateTask, updatePipelineStage, getTask } from "./db.js";
 import { checkCapacity } from "./capacity.js";
 import { createWorktree, cleanupWorktree, saveWipWork, type Worktree } from "./worktree.js";
 import { runReviewLoop } from "./review-loop.js";
@@ -523,24 +523,44 @@ ${tqCheckOutput.slice(0, 4000)}`;
       }
     }
 
-    // Try to save WIP work on unexpected errors
-    if (worktree) {
-      const wip = saveWipWork(worktree, description);
-      if (wip.saved) {
-        console.log(`  WIP saved via ${wip.method}`);
-      }
-    }
+    // WIP preservation is handled in the `finally` block based on the final
+    // task status; no need to duplicate it here (and doing so unguarded would
+    // mask the original error if `saveWipWork` itself throws).
 
     updateTask(taskId, { status: "failed", error });
     if (issueRef) notifyFailed(issueRef, taskId, error);
     else notifyTaskFailed(taskId, repoName, error);
     return { taskId, success: false, prUrl: null, error };
   } finally {
-    // Clean up worktree
+    // Clean up worktree. For failed/partial tasks, save WIP work and preserve the
+    // branch so the task can be inspected or recovered later (see `ym recover`).
     if (worktree) {
+      const finalStatus = getTask(taskId)?.status;
+      const preserve =
+        finalStatus === "failed" ||
+        finalStatus === "partial" ||
+        finalStatus === "interrupted";
+
+      if (preserve) {
+        try {
+          const wip = saveWipWork(worktree, description);
+          if (wip.saved) {
+            console.log(`  WIP saved via ${wip.method}${wip.ref ? ` (${wip.ref})` : ""}`);
+          }
+        } catch (err) {
+          console.log(
+            `  Warning: failed to save WIP work: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+
       try {
-        cleanupWorktree(repo, worktree);
-        console.log(`  Worktree cleaned up`);
+        cleanupWorktree(repo, worktree, { preserveBranch: preserve });
+        if (preserve) {
+          console.log(`  Worktree removed; branch ${worktree.branch} preserved for recovery`);
+        } else {
+          console.log(`  Worktree cleaned up`);
+        }
       } catch {
         console.log(`  Warning: worktree cleanup failed at ${worktree.path}`);
       }
