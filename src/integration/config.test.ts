@@ -5,7 +5,7 @@ vi.mock("node:os", () => ({ homedir: () => "/home/testuser" }));
 vi.mock("node:fs");
 
 import { existsSync, readFileSync } from "node:fs";
-import { hasIntegrationConfig, loadIntegrationConfig } from "./config.js";
+import { hasIntegrationConfig, integrationConfigPath, loadIntegrationConfig } from "./config.js";
 
 const mockExistsSync = vi.mocked(existsSync);
 const mockReadFileSync = vi.mocked(readFileSync);
@@ -57,6 +57,25 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // hasIntegrationConfig
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// integrationConfigPath
+// ---------------------------------------------------------------------------
+
+describe("integrationConfigPath", () => {
+  it("returns a path ending in <repoName>.yml", () => {
+    const path = integrationConfigPath("my-service");
+    expect(path).toMatch(/my-service\.yml$/);
+  });
+
+  it("returns the same path as hasIntegrationConfig checks", () => {
+    // Both functions share the same private configPath — verify consistency.
+    mockExistsSync.mockReturnValue(false);
+    hasIntegrationConfig("parity-repo");
+    const checkedPath = mockExistsSync.mock.calls[0][0] as string;
+    expect(integrationConfigPath("parity-repo")).toBe(checkedPath);
+  });
+});
 
 describe("hasIntegrationConfig", () => {
   it("returns true when the config file exists", () => {

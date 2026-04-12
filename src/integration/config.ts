@@ -40,6 +40,10 @@ function configPath(repoName: string): string {
   return join(INTEGRATION_DIR, `${repoName}.yml`);
 }
 
+export function integrationConfigPath(repoName: string): string {
+  return configPath(repoName);
+}
+
 export function hasIntegrationConfig(repoName: string): boolean {
   return existsSync(configPath(repoName));
 }
