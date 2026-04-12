@@ -97,12 +97,6 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
   for (const task of tasks) {
     const worktreePath = join(config.worktreeBaseDir, task.id);
 
-    if (!existsSync(worktreePath)) {
-      console.log(`  Skipping ${task.id}: worktree not found at ${worktreePath}`);
-      skipped++;
-      continue;
-    }
-
     let repo: ReturnType<typeof getRepo>;
     try {
       repo = getRepo(config, task.repo);
@@ -110,6 +104,27 @@ export async function recoverInterruptedTasks(config: YardmasterConfig): Promise
       console.log(`  Skipping ${task.id}: repo "${task.repo}" not in config`);
       skipped++;
       continue;
+    }
+
+    // If the worktree directory was cleaned up but the branch was preserved,
+    // recreate the worktree from the branch so we can resume.
+    if (!existsSync(worktreePath)) {
+      const branch = task.branch ?? `ym/${task.id}`;
+      try {
+        execFileSync("git", ["rev-parse", "--verify", branch], {
+          cwd: repo.localPath,
+          stdio: "pipe",
+        });
+        execFileSync("git", ["worktree", "add", worktreePath, branch], {
+          cwd: repo.localPath,
+          stdio: "pipe",
+        });
+        console.log(`  Recreated worktree for ${task.id} from preserved branch ${branch}`);
+      } catch {
+        console.log(`  Skipping ${task.id}: worktree not found and branch ${branch} unavailable`);
+        skipped++;
+        continue;
+      }
     }
 
     const stage = task.pipeline_stage;
