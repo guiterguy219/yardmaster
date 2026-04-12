@@ -50,11 +50,11 @@ function makeContext(overrides: Partial<DiagnosticContext> = {}): DiagnosticCont
 }
 
 function agentSuccess(json: object) {
-  return { success: true, result: JSON.stringify(json), error: null };
+  return { success: true, result: JSON.stringify(json), error: null, durationMs: 100 };
 }
 
 function agentFailure(error: string) {
-  return { success: false, result: "", error };
+  return { success: false, result: "", error, durationMs: 100 };
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ describe("runDiagnostician", () => {
     });
 
     it("handles undefined error in agent failure", async () => {
-      vi.mocked(runAgent).mockResolvedValue({ success: false, result: "", error: undefined as any });
+      vi.mocked(runAgent).mockResolvedValue({ success: false, result: "", error: undefined as any, durationMs: 100 });
       const result = await runDiagnostician(makeConfig(), makeContext());
       expect(result.action.type).toBe("give_up");
       expect(result.diagnosis).toContain("Diagnostician failed");
@@ -207,6 +207,7 @@ describe("runDiagnostician", () => {
           action: { type: "give_up", reason: "done" },
         }) + "\n```",
         error: null,
+        durationMs: 100,
       });
       const result = await runDiagnostician(makeConfig(), makeContext());
       expect(result.diagnosis).toBe("test");

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import { createSerenaConfig } from "../serena.js";
@@ -19,7 +19,7 @@ try {
 function sendJsonRpc(
   child: ChildProcess,
   message: Record<string, unknown>,
-  timeoutMs = 15000,
+  timeoutMs = 30000,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -61,23 +61,9 @@ function sendJsonRpc(
 describe.skipIf(!uvxAvailable)("Serena MCP smoke test", () => {
   let configPath: string | undefined;
   let serverProcess: ChildProcess | undefined;
+  let initializeResponse: Record<string, unknown> | undefined;
 
-  afterEach(() => {
-    if (serverProcess && !serverProcess.killed) {
-      serverProcess.kill("SIGTERM");
-      // Give it a moment then force kill
-      setTimeout(() => {
-        if (serverProcess && !serverProcess.killed) {
-          serverProcess.kill("SIGKILL");
-        }
-      }, 3000);
-    }
-    if (configPath && existsSync(configPath)) {
-      unlinkSync(configPath);
-    }
-  });
-
-  it("starts and responds to MCP initialize handshake", async () => {
+  beforeAll(async () => {
     // Use Yardmaster's own repo as the project
     const projectPath = new URL("../../", import.meta.url).pathname.replace(
       /\/$/,
@@ -94,13 +80,12 @@ describe.skipIf(!uvxAvailable)("Serena MCP smoke test", () => {
     });
 
     // Collect stderr for diagnostics on failure
-    let stderr = "";
-    serverProcess.stderr!.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
+    serverProcess.stderr!.on("data", () => {
+      // drain stderr to prevent backpressure
     });
 
     // Send MCP initialize
-    const response = await sendJsonRpc(serverProcess, {
+    initializeResponse = await sendJsonRpc(serverProcess, {
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
@@ -114,11 +99,6 @@ describe.skipIf(!uvxAvailable)("Serena MCP smoke test", () => {
       },
     });
 
-    expect(response).toHaveProperty("result");
-    const result = response.result as Record<string, unknown>;
-    expect(result).toHaveProperty("serverInfo");
-    expect(result).toHaveProperty("capabilities");
-
     // Send initialized notification (required by MCP protocol)
     serverProcess.stdin!.write(
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
@@ -126,45 +106,31 @@ describe.skipIf(!uvxAvailable)("Serena MCP smoke test", () => {
     );
   }, 60000); // 60s timeout — first uvx run may need to fetch the package
 
+  afterAll(() => {
+    if (serverProcess && !serverProcess.killed) {
+      serverProcess.kill("SIGTERM");
+      // Give it a moment then force kill
+      setTimeout(() => {
+        if (serverProcess && !serverProcess.killed) {
+          serverProcess.kill("SIGKILL");
+        }
+      }, 3000);
+    }
+    if (configPath && existsSync(configPath)) {
+      unlinkSync(configPath);
+    }
+  });
+
+  it("starts and responds to MCP initialize handshake", () => {
+    expect(initializeResponse).toHaveProperty("result");
+    const result = initializeResponse!.result as Record<string, unknown>;
+    expect(result).toHaveProperty("serverInfo");
+    expect(result).toHaveProperty("capabilities");
+  });
+
   it("exposes code navigation tools via tools/list", async () => {
-    const projectPath = new URL("../../", import.meta.url).pathname.replace(
-      /\/$/,
-      "",
-    );
-    configPath = createSerenaConfig(projectPath);
-
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    const serena = config.mcpServers.serena;
-
-    serverProcess = spawn(serena.command, serena.args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    let stderr = "";
-    serverProcess.stderr!.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    // Initialize first
-    await sendJsonRpc(serverProcess, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "yardmaster-test", version: "0.1.0" },
-      },
-    });
-
-    serverProcess.stdin!.write(
-      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
-        "\n",
-    );
-
     // Request tools list
-    const toolsResponse = await sendJsonRpc(serverProcess, {
+    const toolsResponse = await sendJsonRpc(serverProcess!, {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/list",
