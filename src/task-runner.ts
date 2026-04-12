@@ -14,6 +14,7 @@ import { ingestRepo } from "./ingestor.js";
 import { runIntegrationTests } from "./integration/runner.js";
 import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.js";
 import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
+import { checkProtectedFiles } from "./protected-files.js";
 
 export interface TaskResult {
   taskId: string;
@@ -262,6 +263,43 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
         if (issueRef) notifyFailed(issueRef, taskId, finalCheckError);
         else notifyTaskFailed(taskId, repoName, finalCheckError);
         return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
+      }
+    }
+
+    // Protected files / functions guard — compare final diff against per-repo
+    // allow-list. Touching a protected file warns; modifying a protected
+    // function signature blocks.
+    const hasProtectedFiles = repo.protectedFiles && repo.protectedFiles.length > 0;
+    const hasProtectedFns = repo.protectedFunctions && Object.keys(repo.protectedFunctions).length > 0;
+    if (hasProtectedFiles || hasProtectedFns) {
+      try {
+        // `git diff HEAD` shows working-tree + staged changes vs HEAD without
+        // mutating the index, so we don't accidentally stage build artifacts,
+        // .env files, or anything else commitAndPush wouldn't have included.
+        const finalDiff = execSync("git diff HEAD", {
+          cwd: worktree.path,
+          stdio: "pipe",
+        }).toString();
+        const guard = checkProtectedFiles(finalDiff, {
+          protectedFiles: repo.protectedFiles,
+          protectedFunctions: repo.protectedFunctions,
+        });
+        for (const w of guard.warnings) {
+          console.log(`  Warning: ${w.message}`);
+        }
+        if (guard.blocks.length > 0) {
+          const detail = guard.blocks.map((b) => b.message).join("; ");
+          const protectedError = `Protected file regression detected: ${detail}`;
+          console.log(`  ${protectedError}`);
+          updateTask(taskId, { status: "failed", error: protectedError });
+          if (issueRef) notifyFailed(issueRef, taskId, protectedError);
+          else notifyTaskFailed(taskId, repoName, protectedError);
+          return { taskId, success: false, prUrl: null, error: protectedError };
+        }
+        updatePipelineStage(taskId, "protected_files_checked");
+      } catch (err) {
+        // Diff inspection failure — log and continue, don't block PR creation
+        console.log(`  Warning: protected files check skipped: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 

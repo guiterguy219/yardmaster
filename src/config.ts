@@ -15,6 +15,8 @@ export interface RepoConfig {
   readyPattern?: string;
   useSerena?: boolean;
   coderTimeout?: number;
+  protectedFiles?: string[];
+  protectedFunctions?: Record<string, string[]>;
 }
 
 export interface TelegramConfig {
@@ -66,6 +68,8 @@ export function loadConfig(): YardmasterConfig {
       readyPattern?: string;
       useSerena?: boolean;
       coderTimeout?: number;
+      protectedFiles?: string[];
+      protectedFunctions?: Record<string, string[]>;
     }>;
     maxConcurrentAgents?: number;
   };
@@ -83,6 +87,8 @@ export function loadConfig(): YardmasterConfig {
     readyPattern: r.readyPattern,
     useSerena: r.useSerena,
     coderTimeout: r.coderTimeout,
+    protectedFiles: r.protectedFiles,
+    protectedFunctions: r.protectedFunctions,
   }));
 
   return {

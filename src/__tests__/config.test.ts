@@ -24,6 +24,57 @@ beforeEach(() => {
 // loadConfig — maxConcurrentAgents
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// loadConfig — protectedFiles / protectedFunctions passthrough
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — protected files config", () => {
+  it("passes protectedFiles through to the repo config", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFiles: ["src/cli.ts", "src/task-runner.ts"],
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFiles).toEqual(["src/cli.ts", "src/task-runner.ts"]);
+  });
+
+  it("passes protectedFunctions through to the repo config", () => {
+    const raw = {
+      repos: [
+        {
+          name: "test-repo",
+          path: "~/repos/test",
+          org: "acme",
+          repo: "test",
+          protectedFunctions: {
+            "src/integration/docker.ts": ["generateComposeFile", "stopServices"],
+          },
+        },
+      ],
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(raw) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFunctions).toEqual({
+      "src/integration/docker.ts": ["generateComposeFile", "stopServices"],
+    });
+  });
+
+  it("leaves protectedFiles and protectedFunctions undefined when absent", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
+    const config = loadConfig();
+    expect(config.repos[0].protectedFiles).toBeUndefined();
+    expect(config.repos[0].protectedFunctions).toBeUndefined();
+  });
+});
+
 describe("loadConfig — maxConcurrentAgents", () => {
   it("defaults to 1 when the field is absent from repos.json", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify(MINIMAL_RAW) as any);
