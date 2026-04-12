@@ -91,28 +91,64 @@ function buildPostgresService(svc: IntegrationServiceConfig): Record<string, unk
   return service;
 }
 
+function parseJdbcUrl(jdbcUrl: string): { dbUrl: string; dbUsername?: string; dbPassword?: string } {
+  // jdbc:postgresql://user:pass@host/db?params → jdbc:postgresql://host/db?params + user + pass
+  const match = jdbcUrl.match(/^(jdbc:postgresql:\/\/)([^:]+):([^@]+)@(.+)$/);
+  if (match) {
+    return { dbUrl: `${match[1]}${match[4]}`, dbUsername: match[2], dbPassword: match[3] };
+  }
+  return { dbUrl: jdbcUrl };
+}
 
 function buildKeycloakService(
   svc: IntegrationServiceConfig,
-  _config: IntegrationConfig,
-  _resolvedSecrets?: Record<string, string>,
+  config: IntegrationConfig,
+  resolvedSecrets?: Record<string, string>,
 ): Record<string, unknown> {
-  const service: Record<string, unknown> = {
-    image: svc.image,
-    command: ["start-dev"],
+  const kcDbJdbcUrl = resolvedSecrets?.["KC_DB_JDBC_URL"] ?? "";
+
+  // Parse JDBC URL to extract credentials — Keycloak needs them as separate env vars
+  // Format: jdbc:postgresql://user:pass@host/db?params
+  const { dbUrl, dbUsername, dbPassword } = parseJdbcUrl(kcDbJdbcUrl);
+
+  const environment: Record<string, string> = {
+    KC_DB: "postgres",
+    KC_DB_URL: dbUrl,
+    ...(dbUsername ? { KC_DB_USERNAME: dbUsername } : {}),
+    ...(dbPassword ? { KC_DB_PASSWORD: dbPassword } : {}),
+    KC_HOSTNAME_STRICT: "false",
+    KC_HTTP_ENABLED: "true",
+    KC_PROXY_HEADERS: "xforwarded",
+    KEYCLOAK_ADMIN: "admin",
+    KEYCLOAK_ADMIN_PASSWORD: "admin",
+    ...(svc.env ?? {}),
   };
 
-  if (svc.env) {
-    service.environment = { ...svc.env };
-  }
+  const service: Record<string, unknown> = {
+    image: svc.image,
+    environment,
+    command: ["start-dev"],
+  };
 
   const ports = mapPorts(svc.ports);
   if (ports) service.ports = ports;
 
-  service.depends_on = { postgres: { condition: "service_healthy" } };
+  // Only add depends_on for docker services that exist in the compose file
+  if (svc.dependsOn) {
+    const dockerDeps: Record<string, { condition: string }> = {};
+    for (const dep of svc.dependsOn) {
+      const depSvc = config.services[dep];
+      if (depSvc?.type.startsWith("docker-")) {
+        dockerDeps[dep] = { condition: "service_healthy" };
+      }
+    }
+    if (Object.keys(dockerDeps).length > 0) {
+      service.depends_on = dockerDeps;
+    }
+  }
 
   service.healthcheck = {
-    test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"],
+    test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080"],
     interval: "5s",
     timeout: "5s",
     retries: 30,

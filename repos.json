@@ -51,6 +51,13 @@
       "branch": "main"
     },
     {
+      "name": "tz-keycloak",
+      "path": "~/code/threatzero/tz-keycloak",
+      "org": "threatzero-solutions",
+      "repo": "tz-keycloak",
+      "branch": "main"
+    },
+    {
       "name": "yardmaster",
       "path": "~/code/gibson-ops/yardmaster",
       "org": "guiterguy219",

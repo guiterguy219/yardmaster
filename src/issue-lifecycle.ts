@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { getTask } from "./db.js";
+import { ghExecEnv, orgFromIssueRef } from "./gh-auth.js";
 import {
   notifyTaskQueued,
   notifyTaskStarted,
@@ -42,7 +43,7 @@ export function commentOnIssue(issueRef: string, body: string): void {
         "--repo", `${parsed.owner}/${parsed.repo}`,
         "--body", body,
       ],
-      { encoding: "utf-8", stdio: "pipe" }
+      { encoding: "utf-8", stdio: "pipe", env: ghExecEnv(parsed.owner) }
     );
   } catch {
     // Best effort — never throw
@@ -74,7 +75,8 @@ export function updateIssueLabels(
       args.push("--remove-label", label);
     }
 
-    execFileSync("gh", args, { encoding: "utf-8", stdio: "pipe" });
+    const org = orgFromIssueRef(issueRef);
+    execFileSync("gh", args, { encoding: "utf-8", stdio: "pipe", ...(org ? { env: ghExecEnv(org) } : {}) });
   } catch {
     // Best effort — never throw
   }

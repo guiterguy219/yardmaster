@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
+import { ghExecEnv } from "../gh-auth.js";
 
 const TZ_KEYCLOAK_REPO = "threatzero-solutions/tz-keycloak";
 const DEFAULT_CLONE_PATH = resolve(homedir(), "code", "threatzero", "tz-keycloak");
@@ -23,7 +24,7 @@ export function cloneKeycloakRepo(clonePath?: string): string {
     console.log("tz-keycloak repo already cloned");
     return path;
   }
-  execSync(`gh repo clone ${TZ_KEYCLOAK_REPO} "${path}"`, { stdio: "pipe" });
+  execSync(`gh repo clone ${TZ_KEYCLOAK_REPO} "${path}"`, { stdio: "pipe", env: ghExecEnv("threatzero-solutions") });
   return path;
 }
 

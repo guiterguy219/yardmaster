@@ -5,6 +5,7 @@ import { runAgent } from "./agent-runner.js";
 import { enqueueTask } from "./queue/task-queue.js";
 import { PRIORITY, type PriorityLevel } from "./queue/constants.js";
 import { notifyQueued } from "./issue-lifecycle.js";
+import { ghExecEnv } from "./gh-auth.js";
 
 export interface ScanResult {
   queued: number;
@@ -87,7 +88,7 @@ export async function scanReposForIssues(config?: YardmasterConfig): Promise<Sca
     try {
       const raw = execSync(
         `gh issue list --repo "${fullRepo}" --search "label:ym,ym-urgent,ym-high,ym-low" --state open --json number,title,body,labels --limit 50`,
-        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], env: ghExecEnv(repo.githubOrg) }
       );
       issues = JSON.parse(raw) as GitHubIssue[];
     } catch (err) {

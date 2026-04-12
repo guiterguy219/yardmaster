@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import type { RepoConfig } from "../config.js";
 import type { Worktree } from "../worktree.js";
+import { ghExecEnv } from "../gh-auth.js";
 
 export interface GitAgentResult {
   committed: boolean;
@@ -59,7 +60,7 @@ export function commitAndPush(
     const baseFlagArg = targetBranch ? `--base ${shellEscape(targetBranch)}` : "";
     const prUrl = execSync(
       `gh pr create --title ${shellEscape(`agent: ${truncate(taskDescription, 60)}`)} --body ${shellEscape(prBody)} --repo "${repo.githubOrg}/${repo.githubRepo}"${baseFlagArg ? " " + baseFlagArg : ""}`,
-      { cwd, encoding: "utf-8" }
+      { cwd, encoding: "utf-8", env: ghExecEnv(repo.githubOrg) }
     ).trim();
 
     return { committed: true, pushed: true, prUrl };

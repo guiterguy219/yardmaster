@@ -89,7 +89,7 @@ describe("cloneKeycloakRepo", () => {
     cloneKeycloakRepo();
     expect(mockExecSync).toHaveBeenCalledWith(
       expect.stringContaining("gh repo clone threatzero-solutions/tz-keycloak"),
-      { stdio: "pipe" }
+      expect.objectContaining({ stdio: "pipe" })
     );
   });
 
@@ -99,7 +99,7 @@ describe("cloneKeycloakRepo", () => {
     cloneKeycloakRepo();
     expect(mockExecSync).toHaveBeenCalledWith(
       expect.stringContaining(`"${DEFAULT_CLONE_PATH}"`),
-      { stdio: "pipe" }
+      expect.objectContaining({ stdio: "pipe" })
     );
   });
 

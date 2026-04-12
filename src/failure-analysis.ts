@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { getDb } from "./db.js";
 import { loadConfig } from "./config.js";
 import { runAgent } from "./agent-runner.js";
+import { ghExecEnv } from "./gh-auth.js";
 
 interface FailurePattern {
   category: string;
@@ -102,7 +103,7 @@ async function createSelfImprovementIssue(category: string, count: number): Prom
   try {
     const existing = execSync(
       `gh issue list --repo "${ymRepo.githubOrg}/${ymRepo.githubRepo}" --label "ym-self-improvement" --search "${category}" --state open --json number --limit 1`,
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], env: ghExecEnv(ymRepo.githubOrg) }
     );
     const issues = JSON.parse(existing) as Array<{ number: number }>;
     if (issues.length > 0) return; // Already have an open issue
@@ -137,7 +138,7 @@ ${descriptions[category] ?? `Unknown failure category: ${category}`}
   try {
     execSync(
       `gh issue create --repo "${ymRepo.githubOrg}/${ymRepo.githubRepo}" --title "Self-improvement: recurring ${category} failures" --body ${shellEscape(body)} --label "ym-self-improvement,ym"`,
-      { stdio: "pipe" }
+      { stdio: "pipe", env: ghExecEnv(ymRepo.githubOrg) }
     );
     console.log(`  [Self-improvement] Created issue for recurring ${category} failures`);
   } catch {

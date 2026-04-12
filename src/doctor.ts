@@ -1,5 +1,6 @@
 import { execSync, execFileSync } from "node:child_process";
 import { loadConfig } from "./config.js";
+import { auditTokens, ghExecEnv } from "./gh-auth.js";
 
 // ── ANSI helpers ─────────────────────────────────────────
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
@@ -138,6 +139,31 @@ function checkRepoRemote(org: string, repo: string, name: string): void {
   }
 }
 
+function checkGhTokens(orgs: string[]): boolean {
+  const uniqueOrgs = [...new Set(orgs)];
+  const { configured, missing } = auditTokens(uniqueOrgs);
+
+  for (const org of configured) {
+    // Validate the token actually works
+    try {
+      execSync(`gh auth status 2>&1`, {
+        stdio: "pipe",
+        env: ghExecEnv(org),
+      });
+      pass(`gh token (${org})`);
+    } catch {
+      fail(`gh token (${org})`, "token configured but invalid or expired");
+      return false;
+    }
+  }
+
+  for (const org of missing) {
+    fail(`gh token (${org})`, "no token — add to data/.gh-tokens.json");
+  }
+
+  return missing.length === 0;
+}
+
 // ── Main export ───────────────────────────────────────────
 
 export async function runDoctor(): Promise<number> {
@@ -170,6 +196,10 @@ export async function runDoctor(): Promise<number> {
   // Repos from config + conditional Serena check
   try {
     const config = loadConfig();
+
+    console.log();
+    console.log(bold("GitHub tokens (per-org)"));
+    if (!checkGhTokens(config.repos.map((r) => r.githubOrg))) criticalFailed = true;
 
     const serenaRepos = config.repos.filter((r) => r.useSerena);
     if (serenaRepos.length > 0) {
