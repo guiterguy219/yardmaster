@@ -196,6 +196,21 @@ async function runSubTaskReviewLoop(
       diff = "";
     }
 
+    // Empty-diff guard: coder reported success but produced no changes
+    if (!diff.trim()) {
+      let gitignoreContents = "(unreadable)";
+      try {
+        gitignoreContents = execSync("cat .gitignore", { cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      } catch {
+        gitignoreContents = "(no .gitignore found)";
+      }
+      console.log(`  ${prefix} [Round ${round}] WARNING: Coder reported success but produced empty diff.`);
+      console.log(`  ${prefix} Coder output summary: ${coderResult.result.slice(0, 300)}`);
+      console.log(`  ${prefix} .gitignore contents:\n${gitignoreContents}`);
+      roundSummaries.push(`- Round ${round}: coder reported success but produced empty diff (possible .gitignore whitelist)`);
+      return { converged: false, rounds: round, roundSummaries, issues: allIssues, judgeUsed: false };
+    }
+
     // Step 3: Build prior rounds context for reviewers
     const priorContext = buildPriorRoundsContext(taskId, round);
 

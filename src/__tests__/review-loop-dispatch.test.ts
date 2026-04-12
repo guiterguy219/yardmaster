@@ -22,9 +22,16 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 vi.mock("node:child_process", () => ({
-  // git add -A, git diff --cached, git diff --cached --name-only
-  execSync: vi.fn().mockReturnValue(""),
-  execFileSync: vi.fn().mockReturnValue(""),
+  // git add -A         → void (return value ignored)
+  // git diff --cached  → non-empty diff so the empty-diff guard does NOT fire
+  // git diff --cached --name-only → list of changed files
+  // cat .gitignore     → contents (only reached in empty-diff scenarios)
+  execSync: vi.fn().mockImplementation((cmd: string) => {
+    if (cmd === "git diff --cached") return "+ some changes\n";
+    if (cmd === "git diff --cached --name-only") return "src/foo.ts\n";
+    return "";
+  }),
+  execFileSync: vi.fn().mockReturnValue("+ some changes\n"),
 }));
 
 vi.mock("../db.js", () => ({
@@ -96,6 +103,7 @@ import { runReviewLoop } from "../review-loop.js";
 import { runStyleReviewer } from "../agents/style-reviewer.js";
 import { runLogicReviewer } from "../agents/logic-reviewer.js";
 import type { YardmasterConfig, RepoConfig } from "../config.js";
+import { execSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -233,5 +241,146 @@ describe("reviewer dispatch — concurrency boundary", () => {
     await runReviewLoop(makeConfig(1), REPO, "ym-boundary-1", "/worktree", "add feature");
 
     expect(tracker.getMaxInFlight()).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Empty-diff guard
+// ---------------------------------------------------------------------------
+// These tests cover the guard added after Step 2 (get diff) in
+// runSubTaskReviewLoop:  when the coder reports success but git diff --cached
+// produces an empty (or whitespace-only) string, the loop should bail out
+// immediately without calling any reviewers and return converged: false.
+// ---------------------------------------------------------------------------
+
+describe("empty-diff guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Reset reviewer mocks to the default approving stub
+    vi.mocked(runStyleReviewer).mockResolvedValue({
+      result: '{"verdict":"approve","issues":[]}',
+      durationMs: 10,
+      success: true,
+    });
+    vi.mocked(runLogicReviewer).mockResolvedValue({
+      result: '{"verdict":"approve","issues":[]}',
+      durationMs: 10,
+      success: true,
+    });
+  });
+
+  it("returns converged:false when git diff --cached is empty", async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "";
+      if ((cmd as string).startsWith("cat")) return "node_modules/\ndist/\n";
+      return "";
+    });
+
+    const result = await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-empty-diff-test",
+      "/worktree",
+      "add feature"
+    );
+
+    expect(result.converged).toBe(false);
+  });
+
+  it("returns converged:false when git diff --cached is whitespace-only", async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "   \n\t  ";
+      if ((cmd as string).startsWith("cat")) return "node_modules/\n";
+      return "";
+    });
+
+    const result = await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-whitespace-diff-test",
+      "/worktree",
+      "add feature"
+    );
+
+    expect(result.converged).toBe(false);
+  });
+
+  it("does NOT call style or logic reviewers when diff is empty", async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "";
+      return "";
+    });
+
+    await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-empty-diff-no-reviewers",
+      "/worktree",
+      "add feature"
+    );
+
+    expect(runStyleReviewer).not.toHaveBeenCalled();
+    expect(runLogicReviewer).not.toHaveBeenCalled();
+  });
+
+  it("includes an empty-diff message in reviewSummary", async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "";
+      return "";
+    });
+
+    const result = await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-empty-diff-summary",
+      "/worktree",
+      "add feature"
+    );
+
+    expect(result.converged).toBe(false);
+    expect(result.reviewSummary).toMatch(/empty diff/i);
+  });
+
+  it("handles missing .gitignore gracefully (no throw)", async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "";
+      // Simulate .gitignore not found by throwing
+      if ((cmd as string).startsWith("cat")) {
+        throw new Error("cat: .gitignore: No such file or directory");
+      }
+      return "";
+    });
+
+    // Should not throw — the guard catches the error and continues
+    await expect(
+      runReviewLoop(
+        makeConfig(1),
+        REPO,
+        "ym-no-gitignore",
+        "/worktree",
+        "add feature"
+      )
+    ).resolves.toMatchObject({ converged: false });
+  });
+
+  it("proceeds normally and calls reviewers when diff is non-empty", async () => {
+    // Confirm the guard is bypassed for a non-empty diff
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === "git diff --cached") return "+ some real change\n";
+      if (cmd === "git diff --cached --name-only") return "src/foo.ts\n";
+      return "";
+    });
+
+    await runReviewLoop(
+      makeConfig(1),
+      REPO,
+      "ym-nonempty-diff",
+      "/worktree",
+      "add feature"
+    );
+
+    expect(runStyleReviewer).toHaveBeenCalledTimes(1);
+    expect(runLogicReviewer).toHaveBeenCalledTimes(1);
   });
 });
