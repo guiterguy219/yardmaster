@@ -6,6 +6,7 @@ import { startServices, stopServices, isDockerAvailable } from "./docker.js";
 import { scaffoldIntegrationTests } from "./scaffold.js";
 import { runIntegrationTestAgent } from "../agents/integration-test.js";
 import { runCoder } from "../agents/coder.js";
+import { verifyCheckOrFix } from "../agents/verify-check.js";
 
 const MAX_FIX_ATTEMPTS = 2;
 
@@ -126,6 +127,31 @@ export async function runIntegrationTests(
 
       if (testsWritten) {
         execSync("git add -A", { cwd: worktreePath, stdio: "pipe" });
+
+        // Verify the integration tests just written type-check before running them.
+        // Soft-fail: downstream test invocation and final check gate will catch
+        // any remaining errors.
+        const checkResult = await verifyCheckOrFix(
+          repo,
+          worktreePath,
+          "integration-test",
+          async (errorOutput) => {
+            const fixPrompt = `${description}
+
+## Integration Test Type Errors
+
+The integration tests just written produced TypeScript errors when running \`${repo.checkCommand}\`. Fix the test files so the check passes. Prefer fixing the tests; only modify source code if the tests reveal a genuine type bug.
+
+## Check Output
+
+${errorOutput.slice(0, 4000)}`;
+            await runCoder(config, repo, fixPrompt, worktreePath);
+            execSync("git add -A", { cwd: worktreePath, stdio: "pipe" });
+          },
+        );
+        if (!checkResult.passed && !checkResult.skipped) {
+          console.log(`    Integration test check still failing after ${checkResult.attempts} attempts — proceeding to test run`);
+        }
       }
     }
 

@@ -10,6 +10,7 @@ import { runLogicReviewer } from "./agents/logic-reviewer.js";
 import { runToolsAgent } from "./agents/tools-agent.js";
 import { runPlanner, type SubTask } from "./agents/planner.js";
 import { runJudge } from "./agents/judge.js";
+import { verifyCheckOrFix } from "./agents/verify-check.js";
 import { checkAlignment } from "./alignment-gate.js";
 
 export interface ReviewLoopResult {
@@ -482,6 +483,32 @@ export async function runReviewLoop(
         issues: result.issues,
         reviewSummary: `Did not converge\n\n${allSummaries.join("\n")}`,
       };
+    }
+
+    // Per-sub-task type-check gate. The coder's work is not "complete" until
+    // the repo's check command passes. Soft-fail: the post-review-loop check
+    // in task-runner is the hard gate, but catching errors here keeps later
+    // sub-tasks from building on top of broken code.
+    const checkResult = await verifyCheckOrFix(
+      repo,
+      worktreePath,
+      `coder/${i + 1}`,
+      async (errorOutput) => {
+        const fixPrompt = `${subTask.description}
+
+## Type-Check Errors
+
+Your previous changes did not pass \`${repo.checkCommand}\`. Fix the errors below before finishing.
+
+## Check Output
+
+${errorOutput.slice(0, 4000)}`;
+        const fixResult = await runCoder(config, repo, fixPrompt, worktreePath);
+        logAgentRun(taskId, "coder", result.rounds, "Sub-task type-check fix", fixResult.result.slice(0, 500), fixResult.durationMs, fixResult.success);
+      },
+    );
+    if (!checkResult.passed && !checkResult.skipped) {
+      console.log(`  Sub-task ${i + 1} check still failing after ${checkResult.attempts} attempts — post-review check will catch it`);
     }
   }
 
