@@ -17,6 +17,7 @@ import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.
 import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
 import { runDiagnosticLoop } from "./diagnostician.js";
 import { checkProtectedRegressions, formatViolations } from "./protected-regressions.js";
+import { runCIPreflight } from "./ci-preflight.js";
 
 export interface TaskResult {
   taskId: string;
@@ -471,6 +472,42 @@ ${errorOutput.slice(0, 4000)}`;
           return { taskId, success: false, prUrl: null, error: `Final check failed: ${repo.checkCommand}` };
         }
       }
+    }
+
+    // CI preflight — run CI workflow checks locally before pushing
+    console.log(`  Running CI preflight...`);
+    let ciPreflightResult = await runCIPreflight(config, repo, taskId, worktree.path, description);
+    if (ciPreflightResult.ran) {
+      if (ciPreflightResult.skippedJobs.length > 0) {
+        console.log(`  CI preflight: ${ciPreflightResult.skippedJobs.length} job(s) skipped`);
+      }
+      if (!ciPreflightResult.passed) {
+        const ciError = `CI preflight failed after ${ciPreflightResult.attempts} fix attempt(s)`;
+
+        if (!noDiagnose && !diagnosticAttempted.has("ci_preflight") && worktree) {
+          diagnosticAttempted.add("ci_preflight");
+          const diagResult = await runDiagnosticLoop(
+            config, repo, taskId, worktree.path, "ci_preflight", ciError, description
+          );
+          if (diagResult.recovered) {
+            console.log(`  Retrying CI preflight after diagnosis...`);
+            ciPreflightResult = await runCIPreflight(config, repo, taskId, worktree.path, description);
+          }
+        }
+
+        if (!ciPreflightResult.passed) {
+          const finalCiError = `CI preflight failed after ${ciPreflightResult.attempts} fix attempt(s): ${ciPreflightResult.output.slice(0, 200)}`;
+          updateTask(taskId, { status: "failed", error: finalCiError });
+          if (issueRef) notifyFailed(issueRef, taskId, finalCiError);
+          else notifyTaskFailed(taskId, repoName, finalCiError);
+          return { taskId, success: false, prUrl: null, error: finalCiError };
+        }
+      }
+      updatePipelineStage(taskId, "ci_preflight_complete");
+      notifyPipelineStage(taskId, repoName, `CI preflight passed${ciPreflightResult.attempts > 0 ? ` after ${ciPreflightResult.attempts} fix attempt(s)` : ""}`);
+      console.log(`  CI preflight passed`);
+    } else {
+      console.log(`  CI preflight skipped: ${ciPreflightResult.output}`);
     }
 
     // Commit, push, and create PR
