@@ -110,8 +110,10 @@ export async function scanReposForIssues(config?: YardmasterConfig): Promise<Sca
         priority = await classifyIssue(cfg, issue.title, issue.body);
       }
 
-      // Build task description
-      const taskDescription = `${issue.title}\n\n${issue.body}\n\nCloses ${issueRef}`;
+      // Minimal fallback description — the worker re-fetches the full issue
+      // (title + body + comments) at pickup time via fetchFreshIssue().
+      // We keep only the title here as a fallback if the re-fetch fails.
+      const taskDescription = `${issue.title}\n\nCloses ${issueRef}`;
 
       try {
         const jobId = await enqueueTask(

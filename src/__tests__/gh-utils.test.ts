@@ -130,6 +130,62 @@ describe("fetchFreshIssue — open issue with comments", () => {
 
     expect(result.description).not.toContain("## Issue Comments");
   });
+
+  it("filters out yardmaster bot comments", () => {
+    mockExecSync.mockReturnValue(
+      JSON.stringify({
+        title: "Fix login bug",
+        body: "Login is broken.",
+        state: "OPEN",
+        comments: [
+          {
+            body: "🤖 **Yardmaster** — Task queued\n\nTask `abc123` has been created.",
+            author: { login: "github-actions[bot]" },
+            createdAt: "2024-01-15T10:00:00Z",
+          },
+          {
+            body: "I can reproduce this on Firefox too.",
+            author: { login: "alice" },
+            createdAt: "2024-01-15T11:00:00Z",
+          },
+          {
+            body: "🤖 **Yardmaster** — Work started\n\nTask `abc123` is now being worked on.",
+            author: { login: "github-actions[bot]" },
+            createdAt: "2024-01-15T12:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    const result = fetchFreshIssue(ISSUE_REF, FALLBACK);
+
+    expect(result.description).toContain("## Issue Comments");
+    expect(result.description).toContain("--- Comment by @alice");
+    expect(result.description).toContain("I can reproduce this on Firefox too.");
+    expect(result.description).not.toContain("Task queued");
+    expect(result.description).not.toContain("Work started");
+  });
+
+  it("omits comments block when all comments are bot comments", () => {
+    mockExecSync.mockReturnValue(
+      JSON.stringify({
+        title: "T",
+        body: "B",
+        state: "OPEN",
+        comments: [
+          {
+            body: "🤖 **Yardmaster** — Task queued\n\nTask `abc` created.",
+            author: { login: "github-actions[bot]" },
+            createdAt: "2024-01-15T10:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    const result = fetchFreshIssue(ISSUE_REF, FALLBACK);
+
+    expect(result.description).not.toContain("## Issue Comments");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -46,8 +46,14 @@ export function fetchFreshIssue(
     // Build description from fresh title + body + comments
     let description = `${issue.title}\n\n${issue.body ?? ""}`;
 
-    if (issue.comments?.length) {
-      const commentBlock = issue.comments
+    // Filter out yardmaster's own bot comments (status updates like
+    // "Task queued", "Work started", etc.) — they're noise for the agent.
+    const humanComments = (issue.comments ?? []).filter(
+      (c) => !c.body.startsWith("🤖 **Yardmaster**")
+    );
+
+    if (humanComments.length) {
+      const commentBlock = humanComments
         .map(
           (c) =>
             `--- Comment by @${c.author.login} (${c.createdAt}) ---\n${c.body}`
