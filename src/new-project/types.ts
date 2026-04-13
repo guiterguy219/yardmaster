@@ -2,9 +2,9 @@ export interface ProjectSpec {
   name: string;
   displayName?: string;
   description: string;
-  githubOrg: string;
+  githubOrg?: string;
   platform: "mobile" | "web" | "api" | "fullstack";
-  framework: string;
+  framework?: string;
   language: "typescript" | "javascript";
   styling?: string;
   backend?: string;
@@ -18,6 +18,10 @@ export interface ProjectSpec {
   additionalDeps?: string[];
   additionalDevDeps?: string[];
   notes?: string;
+  /** Override the parent directory name under ~/code/. Defaults to "gibson-ops". */
+  companyDir?: string;
+  /** Declared project files from spec (used by generic scaffolder). */
+  files?: string[];
 }
 
 export interface RawRepoConfigEntry {
