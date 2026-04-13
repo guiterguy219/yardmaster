@@ -17,6 +17,7 @@ import { notifyStarted, notifyPrCreated, notifyFailed } from "./issue-lifecycle.
 import { notifyTaskStarted, notifyTaskCompleted, notifyTaskFailed, notifyPipelineStage } from "./telegram/notify.js";
 import { runDiagnosticLoop } from "./diagnostician.js";
 import { checkProtectedRegressions, formatViolations } from "./protected-regressions.js";
+import { extractExecOutput } from "./utils/exec-error.js";
 
 export interface TaskResult {
   taskId: string;
@@ -200,7 +201,7 @@ export async function executeTask(
         checkPassed = true;
         console.log(`  Check passed`);
       } catch (err) {
-        checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
+        checkOutput = extractExecOutput(err);
         console.log(`  Check FAILED`);
       }
 
@@ -227,7 +228,7 @@ Fix the code so the check passes. These are likely TypeScript type errors.`;
             console.log(`  Check passed after ${attempt} fix attempt(s)`);
             break;
           } catch (err) {
-            checkOutput = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
+            checkOutput = extractExecOutput(err);
             console.log(`  Check FAILED`);
           }
         }
@@ -425,7 +426,7 @@ ${errorOutput.slice(0, 4000)}`;
         execSync(repo.checkCommand, { cwd: worktree.path, stdio: "pipe" });
         console.log(`  Final check passed`);
       } catch (err) {
-        const checkError = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
+        const checkError = extractExecOutput(err);
         console.log(`  Final check FAILED`);
         const finalCheckError = `Final check failed: ${checkError.slice(0, 200)}`;
 

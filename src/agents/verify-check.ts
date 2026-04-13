@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import type { RepoConfig } from "../config.js";
+import { extractExecOutput } from "../utils/exec-error.js";
 
 export interface VerifyCheckResult {
   /** True if the check command passed (either initially or after a fix attempt). */
@@ -10,16 +11,6 @@ export interface VerifyCheckResult {
   output?: string;
   /** True if the repo has no check command configured (treated as passed). */
   skipped?: boolean;
-}
-
-function captureOutput(err: unknown): string {
-  if (err && typeof err === "object") {
-    const e = err as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
-    if (e.stderr) return e.stderr.toString();
-    if (e.stdout) return e.stdout.toString();
-    if (e.message) return e.message;
-  }
-  return String(err);
 }
 
 /**
@@ -50,7 +41,7 @@ export async function verifyCheckOrFix(
       execSync(checkCommand, { cwd: worktreePath, encoding: "utf-8", stdio: "pipe" });
       return { passed: true, output: "" };
     } catch (err) {
-      return { passed: false, output: captureOutput(err) };
+      return { passed: false, output: extractExecOutput(err) };
     }
   };
 

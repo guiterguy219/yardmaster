@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
 import type { YardmasterConfig, RepoConfig } from "./config.js";
 import { runCoder } from "./agents/coder.js";
+import { extractExecOutput } from "./utils/exec-error.js";
+import { verifyCheckOrFix } from "./agents/verify-check.js";
 
 export interface TestLoopResult {
   passed: boolean;
@@ -30,9 +32,36 @@ export async function runTestLoop(
       });
       return { passed: true, output: stdout };
     } catch (err) {
-      const output = (err as any).stderr?.toString() || (err as any).stdout?.toString() || (err instanceof Error ? err.message : String(err));
+      const output = extractExecOutput(err);
       return { passed: false, output };
     }
+  }
+
+  // After tests pass, verify the coder's fixes haven't broken the type check.
+  // This catches the case where tests pass but production code doesn't compile —
+  // previously only caught at the "Final check" gate, too late to re-engage the coder.
+  async function verifyTypesAfterTests(attempt: number): Promise<TestLoopResult> {
+    const checkResult = await verifyCheckOrFix(
+      repo,
+      worktreePath,
+      "test-loop",
+      async (errorOutput) => {
+        const fixPrompt = `${description}
+
+## Type Errors After Test Fixes
+
+Tests pass, but the type checker (\`${repo.checkCommand}\`) now fails. Fix the type errors without breaking the passing tests.
+
+## Check Output
+
+${errorOutput.slice(0, 4000)}`;
+        await runCoder(config, repo, fixPrompt, worktreePath);
+      },
+    );
+    if (!checkResult.passed && !checkResult.skipped) {
+      console.log(`  Tests pass but type check still failing after ${checkResult.attempts} fix attempts`);
+    }
+    return { passed: true, attempts: attempt, output: result.output };
   }
 
   console.log(`  Running tests...`);
@@ -40,7 +69,7 @@ export async function runTestLoop(
 
   if (result.passed) {
     console.log(`  Tests passed`);
-    return { passed: true, attempts: 0, output: result.output };
+    return verifyTypesAfterTests(0);
   }
 
   console.log(`  Tests FAILED`);
@@ -63,7 +92,7 @@ Fix the code so the tests pass.`;
 
     if (result.passed) {
       console.log(`  Tests passed`);
-      return { passed: true, attempts: attempt, output: result.output };
+      return verifyTypesAfterTests(attempt);
     }
 
     console.log(`  Tests FAILED`);
