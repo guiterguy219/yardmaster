@@ -24,6 +24,17 @@ vi.mock("node:fs", async () => {
   };
 });
 
+// Mock node:child_process so no real shell commands are spawned.
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execSync: vi.fn().mockImplementation(() => {
+      throw new Error("mock: shell command not expected in unit tests");
+    }),
+  };
+});
+
 // Mock agent-runner so no real Claude CLI processes are spawned.
 vi.mock("../agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -84,20 +95,21 @@ describe("runScaffold — missing required fields", () => {
   it("throws when name is empty", async () => {
     const spec = { ...VALID_SPEC, name: "" };
     await expect(runScaffold(MINIMAL_CONFIG, spec)).rejects.toThrow(
-      "missing required fields"
+      "missing required field: name"
     );
   });
 
   it("throws when githubOrg is empty", async () => {
     const spec = { ...VALID_SPEC, githubOrg: "" };
     await expect(runScaffold(MINIMAL_CONFIG, spec)).rejects.toThrow(
-      "missing required fields"
+      "missing required field: githubOrg"
     );
   });
 
-  it("throws when framework is empty", async () => {
-    const spec = { ...VALID_SPEC, framework: "" };
-    await expect(runScaffold(MINIMAL_CONFIG, spec)).rejects.toThrow(
+  it("accepts when framework is omitted (generic scaffolder)", async () => {
+    const spec = { ...VALID_SPEC, framework: undefined };
+    // Validation passes (framework is optional); failure comes from filesystem/shell, not validation.
+    await expect(runScaffold(MINIMAL_CONFIG, spec)).rejects.not.toThrow(
       "missing required fields"
     );
   });
