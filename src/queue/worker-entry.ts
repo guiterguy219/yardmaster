@@ -5,6 +5,7 @@ import { loadConfig } from "../config.js";
 import { detectAndMarkInterrupted, recoverInterruptedTasks } from "../recovery.js";
 import { removeOrphanedWorktrees } from "../worktree.js";
 import { ingestTaskHistory } from "../context/ingest-history.js";
+import { restorePriorityForStalledJobs } from "./restore-priority.js";
 
 // Load data/.env if it exists (for Telegram tokens, etc.)
 try {
@@ -34,6 +35,12 @@ console.log(`  ${_marked} task(s) newly marked interrupted`);
 console.log("  Recovering interrupted tasks...");
 const _recovery = await recoverInterruptedTasks(_config);
 console.log(`  Recovered: ${_recovery.recovered}  Failed: ${_recovery.failed}  Skipped: ${_recovery.skipped}`);
+
+console.log("  Restoring priority for stalled jobs...");
+const _restored = await restorePriorityForStalledJobs();
+if (_restored.restored > 0) {
+  console.log(`  Restored: ${_restored.restored} job(s) back into priority queue`);
+}
 
 console.log("  Cleaning up orphaned worktrees...");
 const _gc = removeOrphanedWorktrees(_config);
