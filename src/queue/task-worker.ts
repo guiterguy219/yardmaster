@@ -10,6 +10,7 @@ import {
 import { executeTask } from "../task-runner.js";
 import { checkCapacity } from "../capacity.js";
 import { loadConfig, getRepo } from "../config.js";
+import { fetchFreshIssue } from "../gh-utils.js";
 
 interface TaskJobData {
   repo: string;
@@ -62,7 +63,19 @@ export function startWorker(): Worker {
         }
       }
 
-      const result = await executeTask(repo, description, { issueRef });
+      // Re-fetch issue from GitHub at pickup time so the agent sees the latest
+      // context (comments, edits) rather than the stale payload from enqueue.
+      let freshDescription = description;
+      if (issueRef) {
+        const fresh = fetchFreshIssue(issueRef, description);
+        if (fresh.closed) {
+          console.log(`[Worker] Issue ${issueRef} was closed — skipping job ${job.id}`);
+          return { taskId: "", success: true, skipped: true, reason: "issue-closed" };
+        }
+        freshDescription = fresh.description;
+      }
+
+      const result = await executeTask(repo, freshDescription, { issueRef });
 
       if (result.success) {
         console.log(`[Worker] Job ${job.id} completed. PR: ${result.prUrl ?? "none"}`);
