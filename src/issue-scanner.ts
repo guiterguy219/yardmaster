@@ -6,6 +6,11 @@ import { enqueueTask } from "./queue/task-queue.js";
 import { PRIORITY, type PriorityLevel } from "./queue/constants.js";
 import { notifyQueued } from "./issue-lifecycle.js";
 import { ghExecEnv } from "./gh-auth.js";
+import {
+  ACTIONABILITY_SYSTEM_PROMPT,
+  buildActionabilityPrompt,
+  type ActionabilityResult,
+} from "./prompts/actionability-classifier.js";
 
 export interface ScanResult {
   queued: number;
@@ -16,7 +21,7 @@ export interface ScanResult {
 interface GitHubIssue {
   number: number;
   title: string;
-  body: string;
+  body: string | null;
   labels: Array<{ name: string }>;
 }
 
@@ -77,6 +82,32 @@ async function classifyIssue(
   }
 }
 
+async function classifyActionability(
+  config: YardmasterConfig,
+  title: string,
+  body: string | null
+): Promise<ActionabilityResult> {
+  try {
+    const result = await runAgent(config, {
+      prompt: buildActionabilityPrompt(title, body ?? ""),
+      systemPrompt: ACTIONABILITY_SYSTEM_PROMPT,
+      workingDir: process.cwd(),
+      allowedTools: [],
+      model: "haiku",
+      timeout: 30_000,
+    });
+
+    const parsed = JSON.parse(result.result) as ActionabilityResult;
+    return {
+      actionable: parsed.actionable === true,
+      reason: parsed.reason ?? "unknown",
+    };
+  } catch {
+    // Fail-open: treat as actionable if classification fails
+    return { actionable: true, reason: "classification failed" };
+  }
+}
+
 export async function scanReposForIssues(config?: YardmasterConfig): Promise<ScanResult> {
   const cfg = config ?? loadConfig();
   const result: ScanResult = { queued: 0, skipped: 0, errors: [] };
@@ -104,14 +135,35 @@ export async function scanReposForIssues(config?: YardmasterConfig): Promise<Sca
         continue;
       }
 
+      // Check for ym-skip label
+      const hasSkipLabel = issue.labels.some(
+        (l) => l.name.toLowerCase() === "ym-skip"
+      );
+      if (hasSkipLabel) {
+        const reason = "has ym-skip label";
+        recordQueuedIssue(issueRef, "skipped:non-actionable");
+        result.skipped++;
+        console.log(`  Skipped (non-actionable): ${issueRef} — ${reason}`);
+        continue;
+      }
+
+      // Classify actionability
+      const actionability = await classifyActionability(cfg, issue.title, issue.body);
+      if (!actionability.actionable) {
+        recordQueuedIssue(issueRef, "skipped:non-actionable");
+        result.skipped++;
+        console.log(`  Skipped (non-actionable): ${issueRef} — ${actionability.reason}`);
+        continue;
+      }
+
       // Determine priority
       let priority = priorityFromLabels(issue.labels);
       if (priority === null) {
-        priority = await classifyIssue(cfg, issue.title, issue.body);
+        priority = await classifyIssue(cfg, issue.title, issue.body ?? "");
       }
 
       // Build task description
-      const taskDescription = `${issue.title}\n\n${issue.body}\n\nCloses ${issueRef}`;
+      const taskDescription = `${issue.title}\n\n${issue.body ?? ""}\n\nCloses ${issueRef}`;
 
       try {
         const jobId = await enqueueTask(
