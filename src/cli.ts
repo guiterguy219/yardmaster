@@ -1034,7 +1034,7 @@ program
   .command("new")
   .description("Scaffold a new project and register it in Yardmaster.")
   .option("--file <path>", "Project spec file (markdown or JSON). If omitted, a discovery agent infers a spec from defaults.")
-  .option("--org <org>", "GitHub org/user (overrides spec)")
+  .option("--org <org>", "GitHub org/user (overrides spec; defaults to authenticated GitHub user)")
   .action(async (opts: { file?: string; org?: string }) => {
     console.log("\nYardmaster — New Project\n");
     const config = loadConfig();
@@ -1051,14 +1051,28 @@ program
     }
 
     if (!spec.githubOrg) {
-      console.error("Error: githubOrg is required (set in spec or pass --org).");
-      process.exit(1);
+      try {
+        const { execSync } = await import("node:child_process");
+        spec.githubOrg = execSync("gh api user -q .login", { encoding: "utf-8" }).trim();
+        console.log(`  (no --org specified, using GitHub user: ${spec.githubOrg})`);
+      } catch {
+        console.error("Error: githubOrg is required (set in spec, pass --org, or ensure `gh` is authenticated).");
+        process.exit(1);
+      }
     }
 
+    // Convention: ~/code/gibson-ops/<project>. When no companyDir is specified
+    // in the spec, default to gibson-ops (hyphenated).
+    if (!spec.companyDir) {
+      spec.companyDir = "gibson-ops";
+    }
+
+    const dirName = spec.companyDir;
+
     console.log(`\nProject: ${spec.displayName || spec.name}`);
-    console.log(`Platform: ${spec.platform} (${spec.framework})`);
+    console.log(`Platform: ${spec.platform} (${spec.framework ?? "none"})`);
     console.log(`Backend: ${spec.backend || "none"}`);
-    console.log(`Path: ~/code/${spec.githubOrg}/${spec.name}\n`);
+    console.log(`Path: ~/code/${dirName}/${spec.name}\n`);
 
     const result = await runScaffold(config, spec);
 

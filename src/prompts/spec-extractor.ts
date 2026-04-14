@@ -5,7 +5,7 @@ ProjectSpec shape:
   "name": string,                // kebab-case identifier
   "displayName"?: string,
   "description": string,         // one line
-  "githubOrg": string,
+  "githubOrg"?: string,           // optional — CLI resolves via gh if omitted
   "platform": "mobile" | "web" | "api" | "fullstack",
   "framework": string,           // e.g. "expo", "next", "nestjs", "express"
   "language": "typescript" | "javascript",

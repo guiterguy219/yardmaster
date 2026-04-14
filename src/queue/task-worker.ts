@@ -21,14 +21,19 @@ interface TaskJobData {
   queuedAt: number;
 }
 
+/** Worker ID for multi-worker deployments. Set via WORKER_ID env var (defaults to "w0"). */
+const WORKER_ID = process.env.WORKER_ID ?? "w0";
+
 export function startWorker(): Worker {
+  console.log(`[Worker ${WORKER_ID}] Starting (pid ${process.pid})`);
+
   const worker = new Worker(
     QUEUE_NAME,
     async (job: Job<TaskJobData>, token?: string) => {
       const { repo, description, priority, source, issueRef } = job.data;
       const label = PRIORITY_LABELS[priority] ?? `P${priority}`;
 
-      console.log(`\n[Worker] Processing job ${job.id}`);
+      console.log(`\n[Worker ${WORKER_ID}] Processing job ${job.id}`);
       console.log(`  Priority: ${label}`);
       console.log(`  Source: ${source}`);
       console.log(`  Repo: ${repo}`);
@@ -78,9 +83,9 @@ export function startWorker(): Worker {
       const result = await executeTask(repo, freshDescription, { issueRef });
 
       if (result.success) {
-        console.log(`[Worker] Job ${job.id} completed. PR: ${result.prUrl ?? "none"}`);
+        console.log(`[Worker ${WORKER_ID}] Job ${job.id} completed. PR: ${result.prUrl ?? "none"}`);
       } else {
-        console.log(`[Worker] Job ${job.id} failed: ${result.error}`);
+        console.log(`[Worker ${WORKER_ID}] Job ${job.id} failed: ${result.error}`);
         throw new Error(result.error ?? "Task execution failed");
       }
 
@@ -89,13 +94,27 @@ export function startWorker(): Worker {
     {
       connection: REDIS_CONNECTION,
       concurrency: 1,
-      stalledInterval: 30000,
+      lockDuration: 900_000,
+      stalledInterval: 30_000,
       maxStalledCount: 1,
+      removeOnComplete: { count: 200 },
     }
   );
 
+  worker.on("completed", (job) => {
+    console.log(`[Worker ${WORKER_ID}] BullMQ completed event for job ${job?.id}`);
+  });
+
+  worker.on("failed", (job, err) => {
+    console.error(`[Worker ${WORKER_ID}] BullMQ failed event for job ${job?.id}: ${err.message}`);
+  });
+
+  worker.on("stalled", (jobId) => {
+    console.warn(`[Worker ${WORKER_ID}] BullMQ stalled event for job ${jobId}`);
+  });
+
   worker.on("error", (err) => {
-    console.error(`[Worker] Error: ${err.message}`);
+    console.error(`[Worker ${WORKER_ID}] Error: ${err.message}`);
   });
 
   return worker;

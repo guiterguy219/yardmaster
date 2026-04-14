@@ -8,18 +8,9 @@ import { runIntegrationTestAgent } from "../agents/integration-test.js";
 import { runIntegrationAdvisor } from "../agents/integration-advisor.js";
 import { runCoder } from "../agents/coder.js";
 import { verifyCheckOrFix } from "../agents/verify-check.js";
+import { extractExecOutput } from "../utils/exec-error.js";
 
 const MAX_FIX_ATTEMPTS = 2;
-
-function getExecOutput(err: unknown): string {
-  if (err && typeof err === "object") {
-    const e = err as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
-    if (e.stderr) return e.stderr.toString();
-    if (e.stdout) return e.stdout.toString();
-    if (e.message) return e.message;
-  }
-  return String(err);
-}
 
 export interface IntegrationTestResult {
   ran: boolean;
@@ -113,7 +104,7 @@ export async function runIntegrationTests(
       });
       console.log(`    Migrations complete`);
     } catch (err) {
-      const migError = getExecOutput(err);
+      const migError = extractExecOutput(err);
       console.log(`    Migration warning: ${migError.slice(0, 200)}`);
       // Don't fail — migrations may already be applied on Neon branch
     }
@@ -194,7 +185,7 @@ ${errorOutput.slice(0, 4000)}`;
         });
         return { passed: true, output: stdout };
       } catch (err) {
-        return { passed: false, output: getExecOutput(err) };
+        return { passed: false, output: extractExecOutput(err) };
       }
     }
 

@@ -166,6 +166,21 @@ export function getRunningTasks(): TaskRow[] {
     .all() as TaskRow[];
 }
 
+/**
+ * Find the most recent task matching repo + description that has reached a terminal status.
+ * Used by zombie-job cleanup to detect BullMQ jobs whose corresponding task already finished.
+ */
+export function getTerminalTaskByRepoAndDescription(
+  repo: string,
+  description: string
+): TaskRow | undefined {
+  return getDb()
+    .prepare(
+      "SELECT * FROM tasks WHERE repo = ? AND description = ? AND status IN ('done', 'completed', 'failed', 'partial') ORDER BY created_at DESC LIMIT 1"
+    )
+    .get(repo, description) as TaskRow | undefined;
+}
+
 function migrateContextStore(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS context_entries (
@@ -187,6 +202,15 @@ function migrateContextStore(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_context_hash
       ON context_entries(content_hash);
   `);
+
+  const cols = db.prepare("PRAGMA table_info(context_entries)").all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map(c => c.name));
+  if (!colNames.has("access_count")) {
+    db.exec("ALTER TABLE context_entries ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!colNames.has("last_accessed_at")) {
+    db.exec("ALTER TABLE context_entries ADD COLUMN last_accessed_at TEXT");
+  }
 }
 
 export function logAgentRun(

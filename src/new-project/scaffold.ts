@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CONFIG_PATH, type YardmasterConfig } from "../config.js";
 import { generateClaudeMd } from "./claude-md-generator.js";
 import type { ProjectSpec, RawRepoConfigEntry, ScaffoldResult } from "./types.js";
@@ -89,7 +89,9 @@ function getScaffoldCommand(spec: ProjectSpec, projectPath: string): { cmd: stri
       // Caller pre-creates projectPath (cross-platform); npm init runs inside it.
       return { cmd: `npm init -y`, cwd: projectPath };
     default:
-      throw new Error(`Unsupported framework: ${spec.framework}`);
+      // Generic fallback: npm init + install declared deps. Caller pre-creates
+      // projectPath (same as express).
+      return { cmd: `npm init -y`, cwd: projectPath };
   }
 }
 
@@ -224,8 +226,11 @@ export async function runScaffold(
   config: YardmasterConfig,
   spec: ProjectSpec
 ): Promise<ScaffoldResult> {
-  if (!spec.name || !spec.githubOrg || !spec.framework) {
-    throw new Error("ProjectSpec is missing required fields (name, githubOrg, framework)");
+  if (!spec.name) {
+    throw new Error("ProjectSpec is missing required field: name");
+  }
+  if (!spec.githubOrg) {
+    throw new Error("ProjectSpec is missing required field: githubOrg (resolve via --org or `gh api user`)");
   }
 
   // Validate inputs that get interpolated into shell commands.
@@ -245,7 +250,8 @@ export async function runScaffold(
 
   try {
     // Step 1: scaffold
-    const parentDir = join(homedir(), "code", spec.githubOrg);
+    const dirName = spec.companyDir ?? "gibson-ops";
+    const parentDir = join(homedir(), "code", dirName);
     if (!existsSync(parentDir)) {
       mkdirSync(parentDir, { recursive: true });
     }
@@ -255,9 +261,10 @@ export async function runScaffold(
       throw new Error(`Project directory already exists: ${projectPath}`);
     }
 
-    // For express we pre-create the directory in Node (cross-platform); other
-    // scaffolders create it themselves.
-    if (spec.framework === "express") {
+    // For express and generic (unknown) frameworks we pre-create the directory
+    // in Node (cross-platform); dedicated scaffolders create it themselves.
+    const SCAFFOLDER_CREATES_DIR = new Set<string | undefined>(["expo", "next", "nestjs"]);
+    if (!SCAFFOLDER_CREATES_DIR.has(spec.framework)) {
       mkdirSync(projectPath, { recursive: true });
       state.projectDirCreated = true;
     }
@@ -270,6 +277,29 @@ export async function runScaffold(
       throw new Error(`Scaffold completed but project directory not found: ${projectPath}`);
     }
     state.projectDirCreated = true;
+
+    // For generic (unknown) frameworks, install the framework package as a dep
+    // and create declared file structure from the spec.
+    const KNOWN_SCAFFOLDERS = new Set<string | undefined>(["expo", "next", "nestjs", "express"]);
+    if (!KNOWN_SCAFFOLDERS.has(spec.framework) && spec.framework) {
+      assertSafePackages([spec.framework], "framework");
+      console.log(`  → installing framework: ${spec.framework}`);
+      npmInstall(projectPath, [spec.framework], false);
+    }
+
+    // Create declared files from spec (directories only — agents fill content later).
+    if (spec.files && spec.files.length > 0) {
+      for (const file of spec.files) {
+        const filePath = join(projectPath, file);
+        const fileDir = dirname(filePath);
+        if (!existsSync(fileDir)) {
+          mkdirSync(fileDir, { recursive: true });
+        }
+        if (!existsSync(filePath)) {
+          writeFileSync(filePath, "");
+        }
+      }
+    }
 
     // Step 2: dependencies
     const backend = inferBackendDeps(spec);
@@ -340,7 +370,7 @@ export async function runScaffold(
 
     const repoConfigEntry: RawRepoConfigEntry = {
       name: spec.name,
-      path: `~/code/${spec.githubOrg}/${spec.name}`,
+      path: `~/code/${dirName}/${spec.name}`,
       org: spec.githubOrg,
       repo: spec.name,
       branch: "main",
@@ -390,7 +420,11 @@ export async function runScaffold(
   } catch (err) {
     console.error(`\n✗ scaffold failed: ${(err as Error).message}`);
     console.error(`  attempting rollback…`);
-    rollback(state);
+    try {
+      rollback(state);
+    } catch (rollbackErr) {
+      console.error(`  ⚠ rollback error: ${(rollbackErr as Error).message}`);
+    }
     throw err;
   }
 }
