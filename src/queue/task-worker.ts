@@ -94,10 +94,24 @@ export function startWorker(): Worker {
     {
       connection: REDIS_CONNECTION,
       concurrency: 1,
-      stalledInterval: 30000,
+      lockDuration: 900_000,
+      stalledInterval: 30_000,
       maxStalledCount: 1,
+      removeOnComplete: { count: 200 },
     }
   );
+
+  worker.on("completed", (job) => {
+    console.log(`[Worker ${WORKER_ID}] BullMQ completed event for job ${job?.id}`);
+  });
+
+  worker.on("failed", (job, err) => {
+    console.error(`[Worker ${WORKER_ID}] BullMQ failed event for job ${job?.id}: ${err.message}`);
+  });
+
+  worker.on("stalled", (jobId) => {
+    console.warn(`[Worker ${WORKER_ID}] BullMQ stalled event for job ${jobId}`);
+  });
 
   worker.on("error", (err) => {
     console.error(`[Worker ${WORKER_ID}] Error: ${err.message}`);
