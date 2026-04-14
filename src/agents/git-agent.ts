@@ -25,11 +25,13 @@ export function commitAndPush(
     return { committed: false, pushed: false, prUrl: null, error: "No changes to commit" };
   }
 
+  const sanitized = sanitizeTitle(taskDescription);
+
   // Stage and commit
   try {
     execSync("git add -A", { cwd, stdio: "pipe" });
 
-    const commitMsg = `agent(code): ${truncate(taskDescription, 72)}`;
+    const commitMsg = `agent(code): ${truncate(sanitized, 72)}`;
     execSync(`git commit -m ${shellEscape(commitMsg)}`, { cwd, stdio: "pipe" });
   } catch (err) {
     return {
@@ -59,7 +61,7 @@ export function commitAndPush(
 
     const baseFlagArg = targetBranch ? `--base ${shellEscape(targetBranch)}` : "";
     const prUrl = execSync(
-      `gh pr create --title ${shellEscape(`agent: ${truncate(taskDescription, 60)}`)} --body ${shellEscape(prBody)} --repo "${repo.githubOrg}/${repo.githubRepo}"${baseFlagArg ? " " + baseFlagArg : ""}`,
+      `gh pr create --title ${shellEscape(`agent: ${truncate(sanitized, 60)}`)} --body ${shellEscape(prBody)} --repo "${repo.githubOrg}/${repo.githubRepo}"${baseFlagArg ? " " + baseFlagArg : ""}`,
       { cwd, encoding: "utf-8", env: ghExecEnv(repo.githubOrg) }
     ).trim();
 
@@ -72,6 +74,14 @@ export function commitAndPush(
       error: `PR creation failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+function sanitizeTitle(str: string): string {
+  return str
+    .replace(/^#+\s*/, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function truncate(str: string, len: number): string {
