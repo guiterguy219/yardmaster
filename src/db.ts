@@ -187,6 +187,15 @@ function migrateContextStore(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_context_hash
       ON context_entries(content_hash);
   `);
+
+  const cols = db.prepare("PRAGMA table_info(context_entries)").all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map(c => c.name));
+  if (!colNames.has("access_count")) {
+    db.exec("ALTER TABLE context_entries ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!colNames.has("last_accessed_at")) {
+    db.exec("ALTER TABLE context_entries ADD COLUMN last_accessed_at TEXT");
+  }
 }
 
 export function logAgentRun(

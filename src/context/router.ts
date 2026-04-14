@@ -1,5 +1,5 @@
 import { getDb } from "../db.js";
-import type { ContextKind } from "../context-store.js";
+import { bumpAccess, type ContextKind } from "../context-store.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,6 +159,7 @@ export function getContextForAgent(
   // Build sections in priority order, tracking remaining budget
   let remaining = budget;
   const outputSections: string[] = [];
+  const packedIds: number[] = [];
   const sectionSeparator = "\n\n";
 
   for (const kind of KIND_PRIORITY) {
@@ -172,6 +173,7 @@ export function getContextForAgent(
     if (remaining < headerCost + TRUNCATION_MARGIN) break;
 
     const entries: FormattedSection[] = [];
+    const kindPackedIds: number[] = [];
     let kindCost = headerCost;
 
     for (const row of kindRows) {
@@ -184,6 +186,7 @@ export function getContextForAgent(
           if (available > 80) {
             const truncatedBody = `### ${row.key}\n\n${row.content.slice(0, available)}…`;
             entries.push({ kind, key: row.key, body: truncatedBody, charCost: truncatedBody.length + 1 });
+            kindPackedIds.push(row.id);
             kindCost += truncatedBody.length + 1;
           }
         }
@@ -191,6 +194,7 @@ export function getContextForAgent(
       }
 
       entries.push(section);
+      kindPackedIds.push(row.id);
       kindCost += section.charCost;
     }
 
@@ -198,11 +202,19 @@ export function getContextForAgent(
       const separator = kind === "dependency" ? "\n" : "\n\n";
       const section = `${header}\n\n${entries.map((e) => e.body).join(separator)}`;
       outputSections.push(section);
+      packedIds.push(...kindPackedIds);
       remaining -= section.length + sectionSeparator.length;
     }
   }
 
   if (outputSections.length === 0) return "";
+
+  // Bump access telemetry for packed entries (fail-open)
+  try {
+    bumpAccess(packedIds);
+  } catch {
+    // telemetry must never break context retrieval
+  }
 
   return outputSections.join(sectionSeparator);
 }

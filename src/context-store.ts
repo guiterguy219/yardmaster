@@ -30,6 +30,8 @@ interface ContextRow {
   agent_roles: string;
   created_at: string;
   updated_at: string;
+  access_count: number;
+  last_accessed_at: string | null;
 }
 
 function rowToEntry(row: ContextRow): ContextEntry {
@@ -301,4 +303,26 @@ export function ingestPackageJson(
 
   ingestTx();
   return upserted;
+}
+
+// ---------------------------------------------------------------------------
+// Access tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Increment access_count and set last_accessed_at for the given entry IDs.
+ * Fail-open: errors are silently swallowed so telemetry never breaks retrieval.
+ */
+export function bumpAccess(ids: number[]): void {
+  if (ids.length === 0) return;
+
+  try {
+    const db = getDb();
+    const placeholders = ids.map(() => "?").join(",");
+    db.prepare(
+      `UPDATE context_entries SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id IN (${placeholders})`
+    ).run(...ids);
+  } catch {
+    // fail-open: access tracking must never break context retrieval
+  }
 }
