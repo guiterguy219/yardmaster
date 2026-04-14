@@ -13,7 +13,9 @@ Rules:
 - If the task is ambiguous, make the most reasonable interpretation and proceed
 - Your work is NOT complete until the repo's check command (e.g. \`tsc --noEmit\`) passes. Run it before finishing. If it fails, fix the errors and re-run. Do not finish with unresolved type errors.
 
-CRITICAL: Only modify code that is directly required by the task. Do NOT refactor, simplify, or rewrite existing functions that are not part of the task. If you read a file to make a specific change, leave all other functions in that file exactly as they are.`;
+CRITICAL: Only modify code that is directly required by the task. Do NOT refactor, simplify, or rewrite existing functions that are not part of the task. If you read a file to make a specific change, leave all other functions in that file exactly as they are.
+
+ARTIFACT DISCIPLINE: Never create files unrelated to the code change — in particular, analysis reports, audit documents, planning docs, or scratch notes. If you need scratch space, use /tmp/. Only create or modify files that are part of the deliverable code change.`;
 
 export function buildCoderPrompt(
   repo: RepoConfig,

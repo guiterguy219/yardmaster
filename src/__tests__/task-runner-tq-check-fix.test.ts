@@ -98,6 +98,10 @@ vi.mock("../diagnostician.js", () => ({
   runDiagnosticLoop: vi.fn().mockResolvedValue({ recovered: false, diagnosis: "test", action: "give_up" }),
 }));
 
+vi.mock("../ci-preflight.js", () => ({
+  runCIPreflight: vi.fn().mockResolvedValue({ ran: false, passed: true, attempts: 0, output: "no workflow files found", skippedJobs: [] }),
+}));
+
 vi.mock("../agents/git-agent.js", () => ({
   commitAndPush: vi.fn().mockReturnValue({ committed: true, prUrl: "https://github.com/acme/repo/pull/1", error: null }),
 }));
