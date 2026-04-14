@@ -6,6 +6,7 @@ import { detectAndMarkInterrupted, recoverInterruptedTasks } from "../recovery.j
 import { removeOrphanedWorktrees } from "../worktree.js";
 import { ingestTaskHistory } from "../context/ingest-history.js";
 import { restorePriorityForStalledJobs } from "./restore-priority.js";
+import { removeZombieJobs } from "./zombie-cleanup.js";
 
 // Load data/.env if it exists (for Telegram tokens, etc.)
 try {
@@ -40,6 +41,12 @@ console.log("  Restoring priority for stalled jobs...");
 const _restored = await restorePriorityForStalledJobs();
 if (_restored.restored > 0) {
   console.log(`  Restored: ${_restored.restored} job(s) back into priority queue`);
+}
+
+console.log("  Removing zombie jobs...");
+const _zombies = await removeZombieJobs();
+if (_zombies.removed > 0) {
+  console.log(`  Removed: ${_zombies.removed} zombie job(s)`);
 }
 
 console.log("  Cleaning up orphaned worktrees...");

@@ -166,6 +166,21 @@ export function getRunningTasks(): TaskRow[] {
     .all() as TaskRow[];
 }
 
+/**
+ * Find the most recent task matching repo + description that has reached a terminal status.
+ * Used by zombie-job cleanup to detect BullMQ jobs whose corresponding task already finished.
+ */
+export function getTerminalTaskByRepoAndDescription(
+  repo: string,
+  description: string
+): TaskRow | undefined {
+  return getDb()
+    .prepare(
+      "SELECT * FROM tasks WHERE repo = ? AND description = ? AND status IN ('done', 'completed', 'failed', 'partial') ORDER BY created_at DESC LIMIT 1"
+    )
+    .get(repo, description) as TaskRow | undefined;
+}
+
 function migrateContextStore(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS context_entries (
